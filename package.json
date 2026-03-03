@@ -1,0 +1,19 @@
+{
+  "name": "upcloud-explorer",
+  "private": true,
+  "workspaces": [
+    "common",
+    "extension-upcloud",
+    "extension-example"
+  ],
+  "scripts": {
+    "compile": "tsc -b",
+    "watch": "tsc -b -w",
+    "clean": "tsc -b --clean"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.15",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.5.4"
+  }
+}

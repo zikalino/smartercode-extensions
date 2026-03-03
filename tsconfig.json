@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "files": [],
+  "references": [
+    {
+      "path": "./common"
+    },
+    {
+      "path": "./extension-upcloud"
+    },
+    {
+      "path": "./extension-example"
+    }
+  ]
+}

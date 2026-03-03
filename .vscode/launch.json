@@ -1,0 +1,31 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run UpCloud Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/extension-upcloud"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/extension-upcloud/out/**/*.js"
+      ],
+      "preLaunchTask": "npm: watch"
+    },
+    {
+      "name": "Run Example Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/extension-example"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/extension-example/out/**/*.js"
+      ],
+      "preLaunchTask": "npm: watch"
+    }
+  ]
+}

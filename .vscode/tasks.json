@@ -1,0 +1,55 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "watch: all",
+      "type": "npm",
+      "script": "watch",
+      "problemMatcher": "$tsc-watch",
+      "isBackground": true,
+      "presentation": {
+        "reveal": "never"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "watch: extension-upcloud",
+      "type": "npm",
+      "script": "watch",
+      "path": "extension-upcloud",
+      "problemMatcher": "$tsc-watch",
+      "isBackground": true,
+      "presentation": {
+        "reveal": "never"
+      }
+    },
+    {
+      "label": "watch: extension-example",
+      "type": "npm",
+      "script": "watch",
+      "path": "extension-example",
+      "problemMatcher": "$tsc-watch",
+      "isBackground": true,
+      "presentation": {
+        "reveal": "never"
+      }
+    },
+    {
+      "label": "build: extension-upcloud",
+      "type": "npm",
+      "script": "compile",
+      "path": "extension-upcloud",
+      "problemMatcher": "$tsc"
+    },
+    {
+      "label": "build: extension-example",
+      "type": "npm",
+      "script": "compile",
+      "path": "extension-example",
+      "problemMatcher": "$tsc"
+    }
+  ]
+}

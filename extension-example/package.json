@@ -1,0 +1,33 @@
+{
+  "name": "extension-example",
+  "displayName": "Example Extension",
+  "description": "Simple example extension wired to the shared common library.",
+  "version": "0.0.1",
+  "publisher": "local-dev",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onCommand:extensionExample.hello"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "extensionExample.hello",
+        "title": "Example: Say Hello",
+        "category": "Example Extension"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -b",
+    "watch": "tsc -b -w"
+  },
+  "dependencies": {
+    "@upcloud/common": "0.0.1"
+  }
+}

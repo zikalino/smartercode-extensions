@@ -1,0 +1,70 @@
+{
+  "name": "extension-upcloud",
+  "displayName": "UpCloud Explorer",
+  "description": "Resource manager tree view for UpCloud services powered by upctl CLI.",
+  "version": "0.0.1",
+  "publisher": "local-dev",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "upcloudExplorer",
+          "title": "UpCloud",
+          "icon": "media/upcloud.svg"
+        }
+      ]
+    },
+    "views": {
+      "upcloudExplorer": [
+        {
+          "id": "upcloudResourceManager",
+          "name": "Resource Manager",
+          "icon": "media/upcloud.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "upcloudExplorer.refresh",
+        "title": "Refresh",
+        "category": "UpCloud Explorer",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "upcloudExplorer.runUpctl",
+        "title": "Run upctl command",
+        "category": "UpCloud Explorer"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "upcloudExplorer.refresh",
+          "when": "view == upcloudResourceManager",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "upcloudExplorer.runUpctl",
+          "when": "view == upcloudResourceManager && viewItem == upcloudCategory",
+          "group": "inline"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -b",
+    "watch": "tsc -b -w"
+  },
+  "dependencies": {
+    "@upcloud/common": "0.0.1"
+  }
+}
