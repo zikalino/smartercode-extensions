@@ -1,0 +1,25 @@
+type: layout-form
+title: Docker Run
+id: root
+header:
+  - type: header
+    title: Run Docker Container
+    logo: docker.png
+
+form:
+  - type: section
+    subitems:
+    - type: row
+      subitems:
+        - $include: docker/__docker_image_selector_field.yaml
+
+  - type: section
+    subitems:
+      - type: 'action-row'
+        name: Create Container
+        consumes:
+          - variable: image_id
+        install: docker run -it ${image_id}
+        verify: echo running
+        terminal: c${image_id}
+        behavior: interactive-no-wait

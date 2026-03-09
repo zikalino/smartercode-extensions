@@ -1,0 +1,33 @@
+type: layout-form
+title: Docker Exec
+id: root
+header:
+  - type: header
+    title: Execute Command in Container
+    logo: docker.png
+
+form:
+  - type: section
+    subitems:
+    - type: row
+      subitems:
+        - $include: docker/__docker_container_selector_field.yaml
+    - type: row
+      narrow: true
+      subitems:
+        - type: textfield
+          name: Enter Command
+          produces:
+            - variable: cmd
+
+  - type: section
+    subitems:
+      - type: 'action-row'
+        name: Create Container
+        consumes:
+          - variable: container_id
+          - variable: cmd
+        install: docker exec ${container_id} ${cmd}
+        verify: echo running
+        terminal: c${image_id}
+        behavior: interactive-no-wait

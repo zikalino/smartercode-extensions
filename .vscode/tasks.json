@@ -16,10 +16,10 @@
       }
     },
     {
-      "label": "watch: extension-upcloud",
+      "label": "watch: extension-map-designer",
       "type": "npm",
       "script": "watch",
-      "path": "extension-upcloud",
+      "path": "extension-map-designer",
       "problemMatcher": "$tsc-watch",
       "isBackground": true,
       "presentation": {
@@ -38,10 +38,21 @@
       }
     },
     {
-      "label": "build: extension-upcloud",
+      "label": "watch: extension-docker-runner",
+      "type": "npm",
+      "script": "watch",
+      "path": "extension-docker-runner",
+      "problemMatcher": "$tsc-watch",
+      "isBackground": true,
+      "presentation": {
+        "reveal": "never"
+      }
+    },
+    {
+      "label": "build: extension-map-designer",
       "type": "npm",
       "script": "compile",
-      "path": "extension-upcloud",
+      "path": "extension-map-designer",
       "problemMatcher": "$tsc"
     },
     {
@@ -49,6 +60,13 @@
       "type": "npm",
       "script": "compile",
       "path": "extension-example",
+      "problemMatcher": "$tsc"
+    },
+    {
+      "label": "build: extension-docker-runner",
+      "type": "npm",
+      "script": "compile",
+      "path": "extension-docker-runner",
       "problemMatcher": "$tsc"
     }
   ]

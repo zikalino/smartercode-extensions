@@ -1,0 +1,103 @@
+{
+  "name": "vsc-docker",
+  "displayName": "Docker Runner",
+  "description": "SmarterCode Docker Tools",
+  "version": "0.50.1",
+  "repository": "https://github.com/zikalino/vsc-docker",
+  "publisher": "Zim",
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "docker",
+    "azure",
+    "cli"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "vscode-docker-runner.tree",
+          "name": "Docker Runner"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "vscode-docker-runner.displayExplorer",
+        "title": "Docker Runner: Explorer"
+      },
+      {
+        "command": "vscode-docker-runner.displayDiscoverImages",
+        "title": "Docker Runner: Discover Images"
+      },
+      {
+        "command": "vscode-docker-runner.displayCreateContainers",
+        "title": "Docker Runner: Create Containers"
+      },
+      {
+        "command": "vscode-docker-runner.itemOperations",
+        "title": "Docker Runner: Operations"
+      },
+      {
+        "command": "vscode-docker-runner.refreshTree",
+        "title": "Docker Runner: Refresh"
+      }
+    ],
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "vscode-docker-runner.itemOperations",
+          "when": "view == vscode-docker-runner.tree && viewItem == dockerRunnerItem",
+          "group": "inline"
+        },
+        {
+          "command": "vscode-docker-runner.refreshTree",
+          "when": "view == vscode-docker-runner.tree && viewItem == dockerRunnerItem",
+          "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "vscode-docker-runner.refreshTree",
+          "when": "view == vscode-docker-runner.tree",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -b",
+    "watch": "tsc -b -w"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.6",
+    "@types/node": "18.x",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.1",
+    "@typescript-eslint/parser": "^6.13.1",
+    "@vscode/test-cli": "^0.0.4",
+    "@vscode/test-electron": "^2.3.8",
+    "esbuild": "^0.16.17",
+    "esbuild-plugin-yaml": "^0.0.1",
+    "eslint": "^8.54.0",
+    "jsdom": "^24.0.0",
+    "jsdom-global": "^3.0.2",
+    "typescript": "^5.3.2"
+  },
+  "dependencies": {
+    "@apidevtools/swagger-parser": "^10.1.0",
+    "@vscode/codicons": "0.0.20",
+    "@vscode/webview-ui-toolkit": "^1.4.0",
+    "@zim.kalinowski/vscode-helper-toolkit": "^0.1.6",
+    "jsonpath-plus": "^9.0.0",
+    "marked": "^12.0.1",
+    "yaml": "^2.3.4"
+  }
+}

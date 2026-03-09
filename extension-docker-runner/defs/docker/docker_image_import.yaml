@@ -1,0 +1,31 @@
+type: layout-form
+title: Import Image
+id: root
+header:
+  - type: header
+    title: Import Image from .tar File
+    logo: docker.png
+
+form:
+  - type: section
+    subitems:
+    - type: row
+      narrow: true
+      subitems:
+        - type: folder-selector
+          name: Select .tar file
+          folders: false
+          pattern-name: '.tar files'
+          pattern: 'tar'
+          produces:
+            - variable: filename
+
+  - type: section
+    subitems:
+      - type: 'action-row'
+        name: Import
+        consumes:
+          - variable: filename
+        install: docker image import ${filename}
+        verify: echo running
+        behavior: interactive

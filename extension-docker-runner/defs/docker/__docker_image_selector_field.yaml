@@ -1,0 +1,11 @@
+- type: dropdown
+  name: Select Image
+  items: []
+  source:
+    cmd: |
+      docker image list --format json
+    parser: rows-json
+    path-id: $[*].ID
+    path-name: $[*].Repository
+  produces:
+    - variable: image_id

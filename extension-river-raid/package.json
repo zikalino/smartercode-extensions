@@ -1,0 +1,30 @@
+{
+  "name": "extension-river-raid",
+  "displayName": "River Raid Webview",
+  "description": "A River Raid-style arcade game running inside a VS Code webview.",
+  "version": "0.0.1",
+  "publisher": "local-dev",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "riverRaidGame.open",
+        "title": "Open River Raid Game",
+        "category": "River Raid"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -b",
+    "watch": "tsc -b -w"
+  },
+  "dependencies": {
+    "@upcloud/common": "0.0.1"
+  }
+}

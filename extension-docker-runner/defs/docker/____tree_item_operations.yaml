@@ -1,0 +1,245 @@
+#
+# load image
+#
+- type: create
+  item-types:
+    - docker-image-list
+  name: Search for Images
+  template:
+    name: docker/docker_image_search.yaml
+  refresh: docker-image-list
+
+#
+# load image
+#
+- type: load
+  item-types:
+    - docker-image-list
+  name: Load image from tar file
+  behavior: interactive
+  template:
+    name: docker/docker_image_load.yaml
+  refresh: self
+
+#
+# import image
+#
+- type: load
+  item-types:
+    - docker-image-list
+  name: Import image from tar file
+  behavior: interactive
+  template:
+    name: docker/docker_image_import.yaml
+  refresh: self
+
+#
+# prune images
+#
+- type: delete
+  item-types:
+    - docker-image-list
+  name: Prune dangling images
+  cmd: docker image prune
+  behavior: interactive
+  refresh: self
+
+#
+# docker run
+#
+- type: terminal
+  item-types:
+    - docker-image
+  name: Create container from this image
+  cmd: docker run -it ${id} 
+  terminal: c${id}
+  # behavior could be: non-interactive, interactive, interactive-no-wait 
+  behavior: interactive-no-wait
+  # we specify template as well, so the user will have 2 options
+  template:
+    name: docker/docker_run.yaml
+    parameters:
+      image_id: ${id}
+  # this is the id of the container list
+  refresh: docker-container-list
+
+#
+# pull image
+#
+- type: pull
+  item-types:
+    - docker-image
+  name: Pull newers version of the image from the repository
+  behavior: interactive
+  cmd: docker image pull ${repo_tag}
+  refresh: self
+
+#
+# push image
+#
+- type: push
+  item-types:
+    - docker-image
+  name: Push image to the repository
+  behavior: interactive
+  cmd: docker image push ${repo_tag}
+  refresh: none
+
+#
+# save image
+#
+- type: save
+  item-types:
+    - docker-image
+  name: Save to tar file
+  behavior: interactive
+  cmd: docker image save ${id} --output ${id}.tar
+  refresh: none
+
+#
+# delete image
+#
+- type: delete
+  item-types:
+    - docker-image
+  name: Delete
+  cmd: docker image remove ${id}
+  refresh: parent
+
+#
+# prune containers
+#
+- type: delete
+  item-types:
+    - docker-container-list
+  name: Prune stopped containers
+  cmd: docker container prune
+  behavior: interactive
+  refresh: self
+
+#
+# attach to container
+#
+- type: terminal
+  item-types:
+    - docker-container
+  name: Attach to terminal
+  cmd: docker attach ${id}
+  terminal: c${namex}
+  # behavior could be: non-interactive, interactive, interactive-no-wait 
+  behavior: interactive-no-wait
+  refresh: none
+
+#
+# docker exec
+#
+- type: run
+  item-types:
+    - docker-container
+  name: Execute Command in Container
+  # cmd: abc
+  template:
+    name: docker/docker_exec.yaml
+    parameters:
+      container_id: ${id}
+  refresh: none
+
+#
+# docker commit
+#
+- type: commit
+  item-types:
+    - docker-container
+  name: Create a new image from a container's changes
+  cmd: docker commit ${id}
+  template:
+    name: docker/docker_commit.yaml
+    parameters:
+      container_id: ${id}
+  refresh: none
+
+#
+# export container
+#
+- type: save
+  item-types:
+    - docker-container
+  name: Export to tar file
+  behavior: interactive
+  cmd: docker container export ${id} --output ${id}.tar
+  refresh: none
+
+#
+# start container
+#
+- type: start
+  item-types:
+    - docker-container
+  name: Start
+  cmd: docker container start ${id}
+  refresh: self
+  when:
+    path: $.state
+    value: stopped
+
+#
+# stop container
+#
+- type: stop
+  item-types:
+    - docker-container
+  name: Stop
+  cmd: docker container stop ${id}
+  refresh: self
+  when:
+    path: $.state
+    value: started
+
+#
+# pause container
+#
+- type: pause
+  item-types:
+    - docker-container
+  name: Pause
+  cmd: docker container pause ${id}
+  refresh: self
+  when:
+    path: $.state
+    value: started
+
+#
+# unpause container
+#
+- type: unpause
+  item-types:
+    - docker-container
+  name: Unpause
+  cmd: docker container unpause ${id}
+  refresh: self
+  when:
+    path: $.state
+    value: paused
+
+#
+# restart container
+#
+- type: restart
+  item-types:
+    - docker-container
+  name: Restart
+  cmd: docker container restart ${id}
+  when:
+    path: $.state
+    value: started
+  refresh: self
+
+#
+# delete container
+#
+- type: delete
+  item-types:
+    - docker-container
+  name: Delete
+  cmd: docker container remove ${id}
+  refresh: parent

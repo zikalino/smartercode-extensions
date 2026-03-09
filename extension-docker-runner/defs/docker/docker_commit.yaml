@@ -1,0 +1,37 @@
+type: layout-form
+title: Docker Commit
+id: root
+header:
+  - type: header
+    title: Commit Container Changes
+    logo: docker.png
+
+form:
+  - type: section
+    subitems:
+    - type: row
+      subitems:
+        - $include: docker/__docker_container_selector_field.yaml
+    - type: row
+      subitems:
+        - type: textfield
+          name: Repository
+          produces:
+            - variable: repository
+        - type: textfield
+          name: Tag
+          produces:
+            - variable: tag
+
+  - type: section
+    subitems:
+      - type: 'action-row'
+        name: Commit
+        consumes:
+          - variable: container_id
+          - variable: repository
+          - variable: tag
+        install: docker commit ${container_id} ${repository}:${tag}
+        verify: echo running
+        behavior: interactive
+        icon: codicon-check

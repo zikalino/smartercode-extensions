@@ -1,0 +1,30 @@
+{
+  "name": "extension-dungeon-crawler",
+  "displayName": "3D Dungeon Crawler",
+  "description": "A retro Eye-of-the-Beholder-style dungeon crawler running inside a VS Code webview.",
+  "version": "0.0.1",
+  "publisher": "local-dev",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "dungeonCrawlerGame.open",
+        "title": "Open 3D Dungeon Crawler",
+        "category": "Dungeon Crawler"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -b",
+    "watch": "tsc -b -w"
+  },
+  "dependencies": {
+    "@upcloud/common": "0.0.1"
+  }
+}

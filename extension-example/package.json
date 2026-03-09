@@ -11,14 +11,11 @@
     "Other"
   ],
   "main": "./out/extension.js",
-  "activationEvents": [
-    "onCommand:extensionExample.hello"
-  ],
   "contributes": {
     "commands": [
       {
-        "command": "extensionExample.hello",
-        "title": "Example: Say Hello",
+        "command": "extensionExample.openDiagramDesigner",
+        "title": "Example: Open Diagram Designer",
         "category": "Example Extension"
       }
     ]

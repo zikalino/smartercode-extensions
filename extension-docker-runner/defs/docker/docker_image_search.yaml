@@ -1,0 +1,45 @@
+type: layout-form
+title: Discover Images
+id: root
+header:
+  - type: header
+    title: Discover images
+    logo: docker.png
+
+form:
+  - type: section
+    subitems:
+    - type: row
+      narrow: true
+      subitems:
+        - type: textfield
+          name: Search String
+          produces:
+            - variable: search
+    - type: row
+      narrow: true
+      subitems:
+        - type: dropdown
+          name: Select Image to Pull
+          consumes:
+            - variable: search
+          items: []
+          source:
+            cmd: |
+              docker search ${search} --format json
+            parser: rows-json
+            path-id: $[*].Name
+            path-name: $[*].Name
+          produces:
+            - variable: image
+
+  - type: section
+    subitems:
+      - type: 'action-row'
+        name: Pull Selected Image
+        consumes:
+          - variable: image
+        install: docker pull ${image}
+        verify: echo running
+        behavior: interactive
+        on-complete: close

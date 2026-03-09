@@ -1,0 +1,13 @@
+- item-types:
+    - docker-container
+  definition:
+    type: section
+    title: Container
+    subitems:
+      - type: row
+        subitems:
+          - type: field
+            icon: icon-state-${state}.svg
+            color: black
+            label: 'State:'
+            value: '${state}'

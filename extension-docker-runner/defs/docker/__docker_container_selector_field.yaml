@@ -1,0 +1,11 @@
+- type: dropdown
+  name: Select Container
+  items: []
+  source:
+    cmd: |
+      docker ps --all --format json
+    parser: rows-json
+    path-id: $[*].ID
+    path-name: $[*].Names
+  produces:
+    - variable: container_id

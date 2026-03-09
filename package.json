@@ -3,8 +3,13 @@
   "private": true,
   "workspaces": [
     "common",
-    "extension-upcloud",
-    "extension-example"
+    "extension-map-designer",
+    "extension-example",
+    "extension-river-raid",
+    "extension-boulder-dash",
+    "extension-dungeon-crawler",
+    "extension-pitfall-adventure",
+    "extension-docker-runner"
   ],
   "scripts": {
     "compile": "tsc -b",

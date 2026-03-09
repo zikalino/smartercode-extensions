@@ -9,10 +9,25 @@
       "path": "./common"
     },
     {
-      "path": "./extension-upcloud"
+      "path": "./extension-map-designer"
     },
     {
       "path": "./extension-example"
+    },
+    {
+      "path": "./extension-river-raid"
+    },
+    {
+      "path": "./extension-boulder-dash"
+    },
+    {
+      "path": "./extension-dungeon-crawler"
+    },
+    {
+      "path": "./extension-pitfall-adventure"
+    },
+    {
+      "path": "./extension-docker-runner"
     }
   ]
 }

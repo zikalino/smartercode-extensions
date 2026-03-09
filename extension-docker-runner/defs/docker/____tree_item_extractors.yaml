@@ -1,0 +1,15 @@
+- item-types:
+    - docker-container
+  fields:
+    namex:
+      path: $.[0].Name
+    state:
+      path: "$.[0].State.Status"
+      map:
+        "running": started
+        "exited": stopped
+- item-types:
+    - docker-image
+  fields:
+    repo_tag:
+      path: $.[0].RepoTags[0]

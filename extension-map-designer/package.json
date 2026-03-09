@@ -1,0 +1,31 @@
+{
+  "name": "extension-map-designer",
+  "displayName": "Game Map Designer",
+  "description": "Tile-based game map designer with playable preview.",
+  "version": "0.0.1",
+  "publisher": "local-dev",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "upcloudExplorer.openGameMapDesigner",
+        "title": "Open Game Map Designer",
+        "category": "Game Map Designer",
+        "icon": "$(game)"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -b",
+    "watch": "tsc -b -w"
+  },
+  "dependencies": {
+    "@upcloud/common": "0.0.1"
+  }
+}
