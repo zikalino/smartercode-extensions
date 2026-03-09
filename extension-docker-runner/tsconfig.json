@@ -12,6 +12,11 @@
     "moduleResolution": "Node16",
     "resolveJsonModule": true
   },
+  "references": [
+    {
+      "path": "../common"
+    }
+  ],
   "include": [
     "src"
   ]

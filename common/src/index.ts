@@ -35,3 +35,6 @@ export function toPrettyJson(value: unknown): string {
 export function buildExtensionGreeting(name: string): string {
   return `Hello from ${name}. Shared code is working.`;
 }
+
+export * from './terminal';
+export * from './workflow-execution-plan';

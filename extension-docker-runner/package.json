@@ -48,6 +48,10 @@
       {
         "command": "vscode-docker-runner.refreshTree",
         "title": "Docker Runner: Refresh"
+      },
+      {
+        "command": "vscode-docker-runner.showWelcome",
+        "title": "Docker Runner: Welcome"
       }
     ],
     "menus": {
@@ -92,6 +96,7 @@
     "typescript": "^5.3.2"
   },
   "dependencies": {
+    "@upcloud/common": "0.0.1",
     "@apidevtools/swagger-parser": "^10.1.0",
     "@vscode/codicons": "0.0.20",
     "@vscode/webview-ui-toolkit": "^1.4.0",

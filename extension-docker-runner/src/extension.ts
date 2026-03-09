@@ -2,6 +2,14 @@ import * as vscode from 'vscode';
 import type { ExtensionContext } from 'vscode';
 import { execSync } from 'child_process';
 import { JSONPath } from 'jsonpath-plus';
+import {
+  executeFlow,
+  terminalChangedShellIntegration,
+  terminalDidClose,
+  WebviewWorkflowInputProvider,
+  WorkflowExecutionPlan,
+  WorkflowExecutionStep
+} from '@upcloud/common';
 
 import * as helpers from '@zim.kalinowski/vscode-helper-toolkit';
 
@@ -547,9 +555,15 @@ async function openFormView(
 export function activate(context: ExtensionContext): void {
   const provider = new DockerTreeProvider(context);
   const treeView = vscode.window.createTreeView(VIEW_ID, { treeDataProvider: provider, showCollapseAll: true });
+  const shellIntegrationDisposable = vscode.window.onDidChangeTerminalShellIntegration(event => {
+    terminalChangedShellIntegration(event.shellIntegration);
+  });
+  const terminalCloseDisposable = vscode.window.onDidCloseTerminal(terminalDidClose);
 
   context.subscriptions.push(
     treeView,
+    shellIntegrationDisposable,
+    terminalCloseDisposable,
     vscode.commands.registerCommand('vscode-docker-runner.displayExplorer', async () => {
       await vscode.commands.executeCommand('workbench.view.explorer');
       await vscode.commands.executeCommand(`${VIEW_ID}.focus`);
@@ -565,6 +579,10 @@ export function activate(context: ExtensionContext): void {
     }),
     vscode.commands.registerCommand('vscode-docker-runner.refreshTree', (item?: TreeNode) => {
       provider.refresh(item);
+    }),
+    vscode.commands.registerCommand('vscode-docker-runner.showWelcome', async () => {
+      const plan = createWelcomeWorkflowExecutionPlan();
+      await executeFlow(plan, new WebviewWorkflowInputProvider());
     })
   );
 
@@ -574,3 +592,26 @@ export function activate(context: ExtensionContext): void {
 }
 
 export function deactivate(): void {}
+
+function createWelcomeWorkflowExecutionPlan(): WorkflowExecutionPlan {
+  const plan = new WorkflowExecutionPlan(
+    'Docker Runner Welcome',
+    [],
+    'Welcome workflow for Docker Runner.',
+    'Run the single verification item to confirm Docker CLI is installed and available on PATH.'
+  );
+
+  plan.addStep(new WorkflowExecutionStep(
+    'verify docker',
+    'Check Docker CLI availability by reading its version.',
+    'docker --version',
+    [
+      {
+        pattern: /not recognized|command not found|no such file/i,
+        description: 'Docker CLI is not available. Install Docker and ensure it is available on PATH.'
+      }
+    ]
+  ));
+
+  return plan;
+}
