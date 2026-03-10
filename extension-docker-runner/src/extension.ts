@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { execSync } from 'child_process';
 import { JSONPath } from 'jsonpath-plus';
 import {
+  executeCommand,
   executeFlow,
   terminalChangedShellIntegration,
   terminalDidClose,
@@ -21,6 +22,15 @@ const TERMINAL_NAME = 'Docker Runner';
 const LOCAL_REGISTRY_LIST_TYPE = 'container-registry-list';
 const LOCAL_REGISTRY_ITEM_TYPE = 'container-registry';
 const LOCAL_REGISTRY_YAML_RELATIVE_PATH = '.smartercode/container-registries.yaml';
+const PUBLIC_IMAGE_REGISTRIES = [
+  'Docker Hub',
+  'GitHub Container Registry',
+  'Quay.io',
+  'Google Container Registry',
+  'Microsoft Container Registry',
+  'Distroless / Chainguard',
+  'Red Hat public registry'
+];
 
 type YamlValue = string | number | boolean | null | YamlObject | YamlValue[];
 interface YamlObject {
@@ -1206,22 +1216,169 @@ function createContainerDeploymentWorkflowExecutionPlan(): WorkflowExecutionPlan
     storeAs: providerStepVariable
   }));
 
+  plan.addStep(new WorkflowExecutionStep(
+    'Load Registries For Provider',
+    'Load local registries for provider plus supported public registries.',
+    async context => {
+      const deploymentProvider = String(context.getVariable(providerStepVariable) ?? '').trim();
+      const registryProvider = getRegistryProviderForDeploymentProvider(deploymentProvider);
+      if (!registryProvider) {
+        return {
+          success: false,
+          output: [`No registry provider mapping found for '${deploymentProvider}'.`],
+          failureDescription: 'Provider mapping is not available.'
+        };
+      }
+
+      const entries = readStoredContainerRegistries()
+        .filter(entry => entry.provider === registryProvider)
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+      const localOptions = entries.map(entry => `Local: ${entry.name}`);
+      const publicOptions = PUBLIC_IMAGE_REGISTRIES.map(name => `Public: ${name}`);
+      context.setVariable('deploy_registry_options', [...localOptions, ...publicOptions]);
+      return {
+        success: true,
+        output: [
+          `Local registries for ${registryProvider}: ${entries.length}`,
+          `Public registries available: ${publicOptions.length}`
+        ]
+      };
+    }
+  ));
+
+  plan.addStep(WorkflowExecutionStep.createSelectionStep({
+    name: 'Registry Selection',
+    description: 'Pick a registry to source container images from.',
+    title: 'Registry Selection',
+    placeHolder: 'Select registry',
+    optionsFromVariable: 'deploy_registry_options',
+    storeAs: 'deploy_registry_name'
+  }));
+
+  plan.addStep(new WorkflowExecutionStep(
+    'Resolve Registry Metadata',
+    'Resolve provider-specific metadata for the selected registry.',
+    async context => {
+      const deploymentProvider = String(context.getVariable(providerStepVariable) ?? '').trim();
+      const registryProvider = getRegistryProviderForDeploymentProvider(deploymentProvider);
+      const selectedName = String(context.getVariable('deploy_registry_name') ?? '').trim();
+
+      if (selectedName.startsWith('Public: ')) {
+        const publicSource = selectedName.replace(/^Public:\s*/, '').trim();
+        context.setVariable('selected_registry_provider', 'Public Registry');
+        context.setVariable('selected_registry_name', publicSource);
+        context.setVariable('selected_registry_location', 'global');
+        context.setVariable('selected_registry_project_id', '');
+        context.setVariable('selected_registry_vm_name', '');
+        context.setVariable('selected_registry_resource_group', '');
+        context.setVariable('selected_registry_is_public', true);
+        return {
+          success: true,
+          output: [`Registry source: ${publicSource}`, 'Type: Public registry']
+        };
+      }
+
+      const localRegistryName = selectedName.replace(/^Local:\s*/, '').trim();
+      const entry = readStoredContainerRegistries().find(item => item.provider === registryProvider && item.name === localRegistryName);
+
+      if (!entry) {
+        return {
+          success: false,
+          output: [`Registry '${selectedName}' not found in local store.`],
+          failureDescription: 'Selected registry metadata is missing.'
+        };
+      }
+
+      context.setVariable('selected_registry_provider', entry.provider);
+      context.setVariable('selected_registry_name', entry.name);
+      context.setVariable('selected_registry_location', entry.location);
+      context.setVariable('selected_registry_project_id', entry.projectId ?? '');
+      context.setVariable('selected_registry_vm_name', entry.vmName ?? '');
+      context.setVariable('selected_registry_resource_group', entry.resourceGroup ?? '');
+      context.setVariable('selected_registry_is_public', false);
+
+      return {
+        success: true,
+        output: [`Registry: ${entry.name}`, `Provider: ${entry.provider}`, `Location: ${entry.location}`]
+      };
+    }
+  ));
+
+  plan.addStep(WorkflowExecutionStep.createTextEntryStep({
+    name: 'Image Filter',
+    description: 'Optional filter used when querying images from selected registry.',
+    title: 'Image Filter',
+    placeHolder: 'e.g. api or web',
+    storeAs: 'image_filter',
+    required: false
+  }));
+
+  plan.addStep(new WorkflowExecutionStep(
+    'Query Available Images',
+    'Query a limited image list from selected registry.',
+    async context => {
+      const provider = String(context.getVariable('selected_registry_provider') ?? '').trim();
+      const name = String(context.getVariable('selected_registry_name') ?? '').trim();
+      const location = String(context.getVariable('selected_registry_location') ?? '').trim();
+      const projectId = String(context.getVariable('selected_registry_project_id') ?? '').trim();
+      const vmName = String(context.getVariable('selected_registry_vm_name') ?? '').trim();
+      const filter = String(context.getVariable('image_filter') ?? '').trim().toLowerCase();
+      const isPublic = context.getVariable('selected_registry_is_public') === true;
+
+      const queried = isPublic
+        ? await queryPublicRegistryImageCandidates(name, filter, 25)
+        : await queryRegistryImageCandidates(provider, name, location, projectId, vmName, 25);
+
+      const filtered = queried
+        .filter(item => filter === '' || item.toLowerCase().includes(filter))
+        .slice(0, 25);
+
+      const finalFallback = isPublic ? inferDefaultPublicImage(name) : `${name}:latest`;
+      const finalList = filtered.length > 0 ? filtered : [finalFallback];
+      context.setVariable('deploy_image_options', finalList);
+
+      return {
+        success: true,
+        output: [`Available images: ${finalList.length}${filter ? ` (filtered by '${filter}')` : ''}`]
+      };
+    }
+  ));
+
+  plan.addStep(WorkflowExecutionStep.createSelectionStep({
+    name: 'Container Image',
+    description: 'Choose container image from selected registry list. Type to filter in the picker.',
+    title: 'Container Image',
+    placeHolder: 'Select image',
+    optionsFromVariable: 'deploy_image_options',
+    storeAs: 'container_image'
+  }));
+
+  plan.addStep(WorkflowExecutionStep.createConfirmStep({
+    name: 'Use Selected Image',
+    description: 'Keep selected image or switch to a custom image reference.',
+    message: 'Use selected image ${container_image}? Choose Cancel to enter a custom image reference.',
+    confirmLabel: 'Use Selected',
+    cancelLabel: 'Use Custom',
+    storeResultAs: 'use_selected_image'
+  }));
+
+  addConditionalTextEntryStep({
+    name: 'Custom Container Image',
+    description: 'Override with a manually entered container image reference.',
+    title: 'Custom Container Image',
+    placeHolder: 'e.g. ghcr.io/my-org/my-app:1.2.3',
+    valueFromVariable: 'container_image',
+    storeAs: 'container_image',
+    required: true
+  }, (variables: Record<string, unknown>) => variables.use_selected_image !== true);
+
   plan.addStep(WorkflowExecutionStep.createTextEntryStep({
     name: 'Container Name',
     description: 'Name used by provider-specific deployment target.',
     title: 'Container Name',
     placeHolder: 'e.g. hello-app',
     storeAs: 'container_name',
-    required: true
-  }));
-
-  plan.addStep(WorkflowExecutionStep.createTextEntryStep({
-    name: 'Container Image',
-    description: 'Container image reference to deploy.',
-    title: 'Container Image',
-    placeHolder: 'e.g. nginx:latest',
-    value: 'nginx:latest',
-    storeAs: 'container_image',
     required: true
   }));
 
@@ -1530,6 +1687,206 @@ function createContainerDeploymentWorkflowExecutionPlan(): WorkflowExecutionPlan
   ));
 
   return plan;
+}
+
+function getRegistryProviderForDeploymentProvider(deploymentProvider: string): string {
+  if (deploymentProvider === 'Azure Container Instance') {
+    return 'Azure ACR';
+  }
+  if (deploymentProvider === 'AWS App Runner') {
+    return 'AWS ECR';
+  }
+  if (deploymentProvider === 'Google Cloud Run') {
+    return 'GCP Artifact Registry';
+  }
+  if (deploymentProvider === 'DigitalOcean App Platform') {
+    return 'DigitalOcean Container Registry';
+  }
+  if (deploymentProvider === 'UpCloud VM (Docker)') {
+    return 'UpCloud VM with Docker Distribution';
+  }
+  return '';
+}
+
+async function queryRegistryImageCandidates(
+  provider: string,
+  registryName: string,
+  location: string,
+  projectId: string,
+  vmName: string,
+  maxCount: number
+): Promise<string[]> {
+  if (provider === 'Azure ACR') {
+    const output = await executeCommand(`az acr repository list --name ${registryName} --top ${maxCount} --output tsv`, true);
+    return normalizeImageCandidates(output, maxCount, item => item.includes(':') ? item : `${item}:latest`);
+  }
+
+  if (provider === 'AWS ECR') {
+    const region = location || 'us-east-1';
+    const tags = await executeCommand(
+      `aws ecr list-images --repository-name ${registryName} --region ${region} --query "imageIds[?imageTag!=null].imageTag" --output text`,
+      true
+    );
+    return normalizeImageCandidates(tags, maxCount, tag => `${registryName}:${tag}`);
+  }
+
+  if (provider === 'GCP Artifact Registry') {
+    if (!location || !projectId || !registryName) {
+      return [`${location || '<region>'}-docker.pkg.dev/${projectId || '<project>'}/${registryName || '<repo>'}/image:latest`];
+    }
+
+    const host = `${location}-docker.pkg.dev/${projectId}/${registryName}`;
+    const output = await executeCommand(
+      `gcloud artifacts docker images list ${host} --include-tags --limit=${maxCount} --format="value(IMAGE)"`,
+      true
+    );
+    return normalizeImageCandidates(output, maxCount);
+  }
+
+  if (provider === 'DigitalOcean Container Registry') {
+    const output = await executeCommand(`doctl registry repository list-v2 ${registryName} --format Name --no-header`, true);
+    return normalizeImageCandidates(output, maxCount, item => `${registryName}/${item}:latest`);
+  }
+
+  if (provider === 'UpCloud VM with Docker Distribution') {
+    const host = vmName || '<upcloud-vm-host>';
+    const output = await executeCommand(
+      `upctl server ssh ${vmName} --command "curl -fsS http://localhost:5000/v2/_catalog | jq -r '.repositories[]'"`,
+      true
+    );
+    const values = normalizeImageCandidates(output, maxCount, item => `${host}:5000/${item}:latest`);
+    if (values.length > 0) {
+      return values;
+    }
+    return [`${host}:5000/${registryName}:latest`];
+  }
+
+  return [`${registryName}:latest`];
+}
+
+async function queryPublicRegistryImageCandidates(source: string, filter: string, maxCount: number): Promise<string[]> {
+  if (source === 'Docker Hub') {
+    const query = filter || 'nginx';
+    const output = await executeCommand(`docker search --limit ${maxCount} ${query}`, true);
+    const parsed = normalizeDockerSearchResults(output, maxCount);
+    if (parsed.length > 0) {
+      return parsed;
+    }
+  }
+
+  const seeded = getPublicRegistrySeedImages(source)
+    .filter(image => filter === '' || image.toLowerCase().includes(filter.toLowerCase()))
+    .slice(0, maxCount);
+
+  if (seeded.length > 0) {
+    return seeded;
+  }
+
+  return [inferDefaultPublicImage(source)];
+}
+
+function normalizeDockerSearchResults(output: string[] | false, maxCount: number): string[] {
+  if (!output || output.length === 0) {
+    return [];
+  }
+
+  const rows = output
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .filter(line => !line.startsWith('NAME'));
+
+  const names = rows
+    .map(row => row.split(/\s+/)[0])
+    .filter(value => value.length > 0)
+    .map(name => `${name}:latest`);
+
+  return Array.from(new Set(names)).slice(0, maxCount);
+}
+
+function inferDefaultPublicImage(source: string): string {
+  const defaults: Record<string, string> = {
+    'Docker Hub': 'nginx:latest',
+    'GitHub Container Registry': 'ghcr.io/github/super-linter:latest',
+    'Quay.io': 'quay.io/prometheus/prometheus:latest',
+    'Google Container Registry': 'gcr.io/google-containers/pause:3.9',
+    'Microsoft Container Registry': 'mcr.microsoft.com/dotnet/aspnet:8.0',
+    'Distroless / Chainguard': 'cgr.dev/chainguard/nginx:latest',
+    'Red Hat public registry': 'registry.access.redhat.com/ubi9/ubi:latest'
+  };
+
+  return defaults[source] ?? 'nginx:latest';
+}
+
+function getPublicRegistrySeedImages(source: string): string[] {
+  if (source === 'GitHub Container Registry') {
+    return [
+      'ghcr.io/github/super-linter:latest',
+      'ghcr.io/actions/actions-runner:latest',
+      'ghcr.io/stargz-containers/python:3.11-org'
+    ];
+  }
+
+  if (source === 'Quay.io') {
+    return [
+      'quay.io/prometheus/prometheus:latest',
+      'quay.io/keycloak/keycloak:latest',
+      'quay.io/centos/centos:stream9'
+    ];
+  }
+
+  if (source === 'Google Container Registry') {
+    return [
+      'gcr.io/google-containers/pause:3.9',
+      'gcr.io/distroless/base:latest',
+      'gcr.io/distroless/static:latest'
+    ];
+  }
+
+  if (source === 'Microsoft Container Registry') {
+    return [
+      'mcr.microsoft.com/dotnet/aspnet:8.0',
+      'mcr.microsoft.com/dotnet/runtime:8.0',
+      'mcr.microsoft.com/oss/nginx/nginx:1.25.3'
+    ];
+  }
+
+  if (source === 'Distroless / Chainguard') {
+    return [
+      'cgr.dev/chainguard/nginx:latest',
+      'cgr.dev/chainguard/python:latest',
+      'gcr.io/distroless/base:latest'
+    ];
+  }
+
+  if (source === 'Red Hat public registry') {
+    return [
+      'registry.access.redhat.com/ubi9/ubi:latest',
+      'registry.access.redhat.com/ubi9/python-311:latest',
+      'registry.access.redhat.com/ubi9/nodejs-20:latest'
+    ];
+  }
+
+  return [];
+}
+
+function normalizeImageCandidates(
+  output: string[] | false,
+  maxCount: number,
+  mapItem: (value: string) => string = (value) => value
+): string[] {
+  if (!output || output.length === 0) {
+    return [];
+  }
+
+  const values = output
+    .flatMap(line => line.split(/[\s\t,]+/))
+    .map(item => item.trim())
+    .filter(item => item.length > 0)
+    .filter(item => !/error|failed|exception|traceback/i.test(item))
+    .map(mapItem);
+
+  const unique = Array.from(new Set(values));
+  return unique.slice(0, maxCount);
 }
 
 function persistContainerRegistryMetadata(context: { getVariable(name: string): unknown }): { success: boolean; output?: string[]; failureDescription?: string } {
