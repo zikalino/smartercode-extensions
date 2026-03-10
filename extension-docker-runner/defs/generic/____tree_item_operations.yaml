@@ -1,6 +1,36 @@
 #
 # Generic
 #
+- type: workflow
+  item-types:
+    - generic
+    - container-registry-list
+  name: Provision Container Registry (Workflow)
+  workflow: container-registry-provision
+  refresh: container-registries
+- type: workflow
+  item-types:
+    - container-registry
+  name: Copy Login Command
+  workflow: container-registry-copy-login
+  refresh: none
+- type: workflow
+  item-types:
+    - container-registry
+  name: Open Provider Console
+  workflow: container-registry-open-console
+  refresh: none
+- type: workflow
+  item-types:
+    - container-registry
+  name: Remove from Local Store
+  workflow: container-registry-remove-local
+  refresh: parent
+- type: workflow
+  item-types:
+    - generic
+  name: Deploy Container (Workflow)
+  workflow: container-deploy
 - type: create
   item-types:
     - generic

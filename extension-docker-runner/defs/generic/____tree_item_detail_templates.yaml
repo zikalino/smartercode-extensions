@@ -62,3 +62,53 @@
             color: black
             label: 'Image:'
             value: '${image}'
+
+- item-types:
+    - container-registry
+  definition:
+    type: section
+    title: Container Registry
+    subitems:
+      - type: row
+        subitems:
+          - type: field
+            icon: codicon-cloud
+            color: black
+            label: 'Provider:'
+            value: '${provider}'
+          - type: field
+            icon: codicon-location
+            color: black
+            label: 'Location:'
+            value: '${location}'
+      - type: row
+        subitems:
+          - type: info-row
+            icon: codicon-calendar
+            color: black
+            label: 'Created At:'
+            value: '${createdAt}'
+          - type: info-row
+            icon: codicon-history
+            color: black
+            label: 'Updated At:'
+            value: '${updatedAt}'
+      - type: row
+        subitems:
+          - type: info-row
+            icon: codicon-server-environment
+            color: black
+            label: 'Resource Group:'
+            value: '${resourceGroup}'
+          - type: info-row
+            icon: codicon-folder-library
+            color: black
+            label: 'Project ID:'
+            value: '${projectId}'
+      - type: row
+        subitems:
+          - type: info-row
+            icon: codicon-vm
+            color: black
+            label: 'VM Name:'
+            value: '${vmName}'

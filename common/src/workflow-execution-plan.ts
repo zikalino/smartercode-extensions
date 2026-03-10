@@ -635,7 +635,7 @@ export class WorkflowExecutionStep {
         context.setVariable(options.storeAs, selected);
         return {
           success: true,
-          output: [`Stored selection in variable: ${options.storeAs}`]
+          output: [`Selected: ${selected}`]
         };
       }
     );

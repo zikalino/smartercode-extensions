@@ -15,7 +15,7 @@
     "commands": [
       {
         "command": "extensionExample.openDiagramDesigner",
-        "title": "Example: Open Diagram Designer",
+        "title": "Example: Open Git Commit Graph",
         "category": "Example Extension"
       }
     ]

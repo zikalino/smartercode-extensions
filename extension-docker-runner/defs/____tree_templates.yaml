@@ -9,6 +9,8 @@ extractors:
 
 operations:
   - $include: docker/____tree_item_operations.yaml
+  - $include: generic/____tree_item_operations.yaml
 
 detail-templates:
   - $include: docker/____tree_item_detail_templates.yaml
+  - $include: generic/____tree_item_detail_templates.yaml

@@ -52,14 +52,32 @@
       {
         "command": "vscode-docker-runner.showWelcome",
         "title": "Docker Runner: Welcome"
+      },
+      {
+        "command": "vscode-docker-runner.provisionContainerRegistry",
+        "title": "Docker Runner: Provision Container Registry"
+      },
+      {
+        "command": "vscode-docker-runner.createContainer",
+        "title": "Docker Runner: Create Container"
       }
     ],
     "menus": {
       "view/item/context": [
         {
+          "command": "vscode-docker-runner.provisionContainerRegistry",
+          "when": "view == vscode-docker-runner.tree && viewItem == dockerRunnerItem",
+          "group": "inline@1"
+        },
+        {
+          "command": "vscode-docker-runner.createContainer",
+          "when": "view == vscode-docker-runner.tree && viewItem == dockerRunnerItem",
+          "group": "inline@2"
+        },
+        {
           "command": "vscode-docker-runner.itemOperations",
           "when": "view == vscode-docker-runner.tree && viewItem == dockerRunnerItem",
-          "group": "inline"
+          "group": "inline@9"
         },
         {
           "command": "vscode-docker-runner.refreshTree",

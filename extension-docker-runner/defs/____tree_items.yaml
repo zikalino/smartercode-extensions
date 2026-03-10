@@ -5,5 +5,11 @@
   details: welcome_details.yaml
   type: generic
 
+- name: Container Registries
+  description: Locally tracked container registries.
+  id: container-registries
+  icon: icon.png
+  type: container-registry-list
+
 # add definitions for respective sections / resouce providers here
 - $include: docker/____tree_docker.yaml
