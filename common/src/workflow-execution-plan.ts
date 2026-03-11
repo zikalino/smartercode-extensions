@@ -462,15 +462,15 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
 
   private statusLabel(status: WorkflowStepStatus): string {
     if (status === 'successful') {
-      return 'SUCCESS';
+      return '✓';
     }
     if (status === 'failed') {
-      return 'FAILED';
+      return 'X';
     }
     if (status === 'running') {
-      return 'RUNNING';
+      return '↻';
     }
-    return 'PENDING';
+    return '...';
   }
 
   private getHtml(): string {
@@ -515,8 +515,26 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
     .status { margin-left: auto; font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--vscode-editorWidget-border); }
     .status-successful { color: var(--vscode-testing-iconPassed); }
     .status-failed { color: var(--vscode-testing-iconFailed); }
-    .status-running { color: var(--vscode-charts-blue); }
+    .status-running { color: transparent; position: relative; }
+    .status-running::before {
+      content: '↻';
+      color: var(--vscode-charts-blue);
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      display: inline-block;
+      animation: status-spin-centered 1s linear infinite;
+    }
     .status-not-executed { color: var(--vscode-descriptionForeground); }
+    @keyframes status-spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    @keyframes status-spin-centered {
+      from { transform: translate(-50%, -50%) rotate(0deg); }
+      to { transform: translate(-50%, -50%) rotate(360deg); }
+    }
     .desc { margin-top: 4px; color: var(--vscode-descriptionForeground); }
     .failure { margin-top: 6px; color: var(--vscode-errorForeground); }
     .step-details { margin-top: 8px; }
@@ -563,10 +581,7 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
       actions.className = 'actions';
       const ok = document.createElement('button');
       ok.textContent = 'Continue';
-      const cancel = document.createElement('button');
-      cancel.textContent = 'Cancel';
       actions.appendChild(ok);
-      actions.appendChild(cancel);
       inputRoot.appendChild(actions);
 
       if (payload.type === 'confirm') {
@@ -574,7 +589,6 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
         message.textContent = payload.message || '';
         content.appendChild(message);
         ok.textContent = payload.confirmLabel || 'Continue';
-        cancel.textContent = payload.cancelLabel || 'Cancel';
         ok.onclick = () => vscode.postMessage({ type: 'submit', payload: { confirmed: true } });
       }
 
@@ -751,7 +765,6 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
         };
       }
 
-      cancel.onclick = () => vscode.postMessage({ type: 'cancel' });
     }
   </script>
 </body>
