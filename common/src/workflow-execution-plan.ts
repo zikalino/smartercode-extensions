@@ -41,6 +41,23 @@ export interface WorkflowTextEntryStepOptions {
   required?: boolean;
 }
 
+export interface WorkflowMultiTextEntryFieldOptions {
+  label: string;
+  placeHolder?: string;
+  prompt?: string;
+  value?: string;
+  valueFromVariable?: string;
+  storeAs: string;
+  required?: boolean;
+}
+
+export interface WorkflowMultiTextEntryStepOptions {
+  name: string;
+  description: string;
+  title: string;
+  fields: WorkflowMultiTextEntryFieldOptions[];
+}
+
 export interface WorkflowSelectionStepOptions {
   name: string;
   description: string;
@@ -62,6 +79,17 @@ export interface WorkflowMultiSelectionStepOptions {
   requireAtLeastOne?: boolean;
 }
 
+export type WorkflowComboQueryProvider = (filter: string, context: WorkflowExecutionContext) => Promise<string[]>;
+
+export interface WorkflowDynamicComboSelectionStepOptions {
+  name: string;
+  description: string;
+  title: string;
+  placeHolder?: string;
+  queryProvider: WorkflowComboQueryProvider;
+  storeAs: string;
+}
+
 export interface WorkflowInputProvider {
   initialize?(plan: WorkflowExecutionPlan): Promise<void> | void;
   onStepStarted?(plan: WorkflowExecutionPlan, stepIndex: number): Promise<void> | void;
@@ -70,8 +98,10 @@ export interface WorkflowInputProvider {
   useMarkdownSnapshots?(): boolean;
   confirm(options: WorkflowConfirmStepOptions, context: WorkflowExecutionContext): Promise<boolean | null>;
   textEntry(options: WorkflowTextEntryStepOptions, context: WorkflowExecutionContext): Promise<string | null>;
+  multiTextEntry(options: WorkflowMultiTextEntryStepOptions, context: WorkflowExecutionContext): Promise<Record<string, string> | null>;
   selection(options: WorkflowSelectionStepOptions, items: string[], context: WorkflowExecutionContext): Promise<string | null>;
   multiSelection(options: WorkflowMultiSelectionStepOptions, items: string[], context: WorkflowExecutionContext): Promise<string[] | null>;
+  dynamicComboSelection(options: WorkflowDynamicComboSelectionStepOptions, context: WorkflowExecutionContext): Promise<string | null>;
 }
 
 class VsCodeWorkflowInputProvider implements WorkflowInputProvider {
@@ -110,6 +140,35 @@ class VsCodeWorkflowInputProvider implements WorkflowInputProvider {
     return typeof value === 'string' ? value : null;
   }
 
+  async multiTextEntry(options: WorkflowMultiTextEntryStepOptions, context: WorkflowExecutionContext): Promise<Record<string, string> | null> {
+    const values: Record<string, string> = {};
+
+    for (let index = 0; index < options.fields.length; index += 1) {
+      const field = options.fields[index];
+      const defaultValueFromVariable = field.valueFromVariable
+        ? context.getVariable(field.valueFromVariable)
+        : undefined;
+      const initialValue = typeof defaultValueFromVariable === 'string'
+        ? defaultValueFromVariable
+        : (field.value ?? '');
+
+      const value = await vscode.window.showInputBox({
+        title: `${context.resolveTemplate(options.title)} (${index + 1}/${options.fields.length})`,
+        placeHolder: field.placeHolder ? context.resolveTemplate(field.placeHolder) : undefined,
+        prompt: field.prompt ? context.resolveTemplate(field.prompt) : context.resolveTemplate(field.label),
+        value: context.resolveTemplate(initialValue)
+      });
+
+      if (typeof value !== 'string') {
+        return null;
+      }
+
+      values[field.storeAs] = value;
+    }
+
+    return values;
+  }
+
   async selection(options: WorkflowSelectionStepOptions, items: string[], context: WorkflowExecutionContext): Promise<string | null> {
     const selected = await vscode.window.showQuickPick(items, {
       title: context.resolveTemplate(options.title),
@@ -128,6 +187,16 @@ class VsCodeWorkflowInputProvider implements WorkflowInputProvider {
 
     return selected ?? null;
   }
+
+  async dynamicComboSelection(options: WorkflowDynamicComboSelectionStepOptions, context: WorkflowExecutionContext): Promise<string | null> {
+    // Fallback: show a quick pick with initial items
+    const initialItems = await options.queryProvider('', context);
+    const selected = await vscode.window.showQuickPick(initialItems, {
+      title: context.resolveTemplate(options.title),
+      placeHolder: options.placeHolder ? context.resolveTemplate(options.placeHolder) : undefined
+    });
+    return selected ?? null;
+  }
 }
 
 export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
@@ -136,6 +205,8 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
   private activeStepIndex = -1;
   private inputPayload: unknown = null;
   private pendingResolve: ((value: unknown) => void) | null = null;
+  private currentQueryProvider: WorkflowComboQueryProvider | null = null;
+  private currentQueryContext: WorkflowExecutionContext | null = null;
 
   public initialize(plan: WorkflowExecutionPlan): void {
     this.plan = plan;
@@ -220,6 +291,41 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
     return typeof response.value === 'string' ? response.value : '';
   }
 
+  async multiTextEntry(options: WorkflowMultiTextEntryStepOptions, context: WorkflowExecutionContext): Promise<Record<string, string> | null> {
+    const fields = options.fields.map(field => {
+      const defaultValueFromVariable = field.valueFromVariable
+        ? context.getVariable(field.valueFromVariable)
+        : undefined;
+      const initialValue = typeof defaultValueFromVariable === 'string'
+        ? defaultValueFromVariable
+        : (field.value ?? '');
+
+      return {
+        label: context.resolveTemplate(field.label),
+        placeHolder: field.placeHolder ? context.resolveTemplate(field.placeHolder) : '',
+        prompt: field.prompt ? context.resolveTemplate(field.prompt) : '',
+        value: context.resolveTemplate(initialValue),
+        storeAs: field.storeAs,
+        required: !!field.required
+      };
+    });
+
+    const response = await this.prompt({
+      type: 'multi-text',
+      title: context.resolveTemplate(options.title),
+      description: options.description,
+      fields
+    }) as { cancelled?: boolean; values?: Record<string, string> } | undefined;
+
+    if (!response || response.cancelled) {
+      return null;
+    }
+
+    return typeof response.values === 'object' && response.values !== null
+      ? response.values
+      : {};
+  }
+
   async selection(options: WorkflowSelectionStepOptions, items: string[], context: WorkflowExecutionContext): Promise<string | null> {
     const response = await this.prompt({
       type: 'single-select',
@@ -250,6 +356,31 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
     }
 
     return Array.isArray(response.values) ? response.values : [];
+  }
+
+  async dynamicComboSelection(options: WorkflowDynamicComboSelectionStepOptions, context: WorkflowExecutionContext): Promise<string | null> {
+    this.currentQueryProvider = options.queryProvider;
+    this.currentQueryContext = context;
+    
+    // Get initial results
+    const initialResults = await options.queryProvider('', context);
+    
+    const response = await this.prompt({
+      type: 'dynamic-combo',
+      title: context.resolveTemplate(options.title),
+      description: options.description,
+      placeHolder: options.placeHolder ? context.resolveTemplate(options.placeHolder) : '',
+      initialResults
+    }) as { cancelled?: boolean; value?: string } | undefined;
+
+    this.currentQueryProvider = null;
+    this.currentQueryContext = null;
+
+    if (!response || response.cancelled) {
+      return null;
+    }
+
+    return typeof response.value === 'string' ? response.value : null;
   }
 
   private async prompt(payload: unknown): Promise<unknown> {
@@ -293,6 +424,16 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
     });
 
     this.panel.webview.onDidReceiveMessage(message => {
+      if (message?.type === 'query' && this.currentQueryProvider && this.currentQueryContext) {
+        const filter = String(message.filter ?? '');
+        void this.currentQueryProvider(filter, this.currentQueryContext).then(results => {
+          if (this.panel) {
+            this.panel.webview.postMessage({ type: 'query-results', results });
+          }
+        });
+        return;
+      }
+
       if (message?.type === 'submit' && this.pendingResolve) {
         const resolve = this.pendingResolve;
         this.pendingResolve = null;
@@ -451,6 +592,45 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
         ok.onclick = () => vscode.postMessage({ type: 'submit', payload: { value: input.value } });
       }
 
+      if (payload.type === 'multi-text') {
+        const entries = [];
+
+        (payload.fields || []).forEach(field => {
+          const wrapper = document.createElement('div');
+          wrapper.style.marginBottom = '10px';
+
+          const label = document.createElement('div');
+          label.textContent = field.label || field.storeAs || 'Field';
+          label.style.marginBottom = '4px';
+          wrapper.appendChild(label);
+
+          if (field.prompt) {
+            const prompt = document.createElement('div');
+            prompt.textContent = field.prompt;
+            prompt.style.marginBottom = '4px';
+            prompt.style.color = 'var(--vscode-descriptionForeground)';
+            wrapper.appendChild(prompt);
+          }
+
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.placeholder = field.placeHolder || '';
+          input.value = field.value || '';
+          wrapper.appendChild(input);
+
+          content.appendChild(wrapper);
+          entries.push({ input, field });
+        });
+
+        ok.onclick = () => {
+          const values = {};
+          for (const entry of entries) {
+            values[entry.field.storeAs] = entry.input.value || '';
+          }
+          vscode.postMessage({ type: 'submit', payload: { values } });
+        };
+      }
+
       if (payload.type === 'single-select') {
         const select = document.createElement('select');
         (payload.items || []).forEach(item => {
@@ -481,6 +661,93 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
             .filter(input => input.checked)
             .map(input => input.value);
           vscode.postMessage({ type: 'submit', payload: { values } });
+        };
+      }
+
+      if (payload.type === 'dynamic-combo') {
+        const searchInput = document.createElement('input');
+        searchInput.type = 'text';
+        searchInput.placeholder = payload.placeHolder || 'Search...';
+        searchInput.style.marginBottom = '8px';
+        content.appendChild(searchInput);
+
+        const optionsList = document.createElement('div');
+        optionsList.className = 'list';
+        optionsList.style.maxHeight = '300px';
+        content.appendChild(optionsList);
+
+        let selectedValue = '';
+        let debounceTimer = 0;
+
+        const renderOptions = (items) => {
+          optionsList.innerHTML = '';
+          if (items.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'empty';
+            empty.textContent = 'No matches found';
+            optionsList.appendChild(empty);
+            return;
+          }
+          items.forEach(item => {
+            const div = document.createElement('div');
+            div.style.padding = '4px 8px';
+            div.style.cursor = 'pointer';
+            div.style.borderRadius = '4px';
+            div.textContent = item;
+            div.onmouseover = () => div.style.backgroundColor = 'var(--vscode-list-hoverBackground)';
+            div.onmouseout = () => div.style.backgroundColor = '';
+            div.ondblclick = () => {
+              vscode.postMessage({ type: 'submit', payload: { value: item, filter: searchInput.value } });
+            };
+            div.onclick = (e) => {
+              e.stopPropagation();
+              selectedValue = item;
+              searchInput.value = item;
+              searchInput.focus();
+            };
+            optionsList.appendChild(div);
+          });
+        };
+
+        const performQuery = () => {
+          const filter = searchInput.value.toLowerCase();
+          vscode.postMessage({ type: 'query', filter: filter });
+        };
+
+        renderOptions(payload.initialResults || []);
+
+        searchInput.oninput = () => {
+          clearTimeout(debounceTimer);
+          debounceTimer = window.setTimeout(performQuery, 250);
+        };
+
+        searchInput.onkeydown = (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            const value = selectedValue || searchInput.value.trim();
+            if (value) {
+              vscode.postMessage({ type: 'submit', payload: { value: value, filter: searchInput.value } });
+            }
+          } else if (e.key === 'Tab') {
+            e.preventDefault();
+            performQuery();
+          }
+        };
+
+        window.addEventListener('message', (event) => {
+          const msg = event.data;
+          if (msg && msg.type === 'query-results') {
+            renderOptions(msg.results || []);
+          }
+        });
+
+        ok.textContent = 'Select';
+        ok.onclick = () => {
+          const value = selectedValue || searchInput.value.trim();
+          if (!value) {
+            return;
+          }
+          vscode.postMessage({ type: 'submit', payload: { value: value, filter: searchInput.value } });
         };
       }
 
@@ -608,6 +875,41 @@ export class WorkflowExecutionStep {
     );
   }
 
+  public static createMultiTextEntryStep(options: WorkflowMultiTextEntryStepOptions): WorkflowExecutionStep {
+    return new WorkflowExecutionStep(
+      options.name,
+      options.description,
+      async context => {
+        const values = await context.getInputProvider().multiTextEntry(options, context);
+
+        if (values === null) {
+          return {
+            success: false,
+            output: ['User cancelled multi text entry.'],
+            failureDescription: 'Cancelled by user.'
+          };
+        }
+
+        for (const field of options.fields) {
+          const value = String(values[field.storeAs] ?? '');
+          if (field.required && value.trim() === '') {
+            return {
+              success: false,
+              output: [`Field '${field.label}' is required but empty.`],
+              failureDescription: 'Required input is empty.'
+            };
+          }
+          context.setVariable(field.storeAs, value);
+        }
+
+        return {
+          success: true,
+          output: [`Stored values for ${options.fields.length} fields.`]
+        };
+      }
+    );
+  }
+
   public static createSelectionStep(options: WorkflowSelectionStepOptions): WorkflowExecutionStep {
     return new WorkflowExecutionStep(
       options.name,
@@ -677,6 +979,30 @@ export class WorkflowExecutionStep {
         return {
           success: true,
           output: [`Stored multi-selection in variable: ${options.storeAs}`]
+        };
+      }
+    );
+  }
+
+  public static createDynamicComboSelectionStep(options: WorkflowDynamicComboSelectionStepOptions): WorkflowExecutionStep {
+    return new WorkflowExecutionStep(
+      options.name,
+      options.description,
+      async context => {
+        const selected = await context.getInputProvider().dynamicComboSelection(options, context);
+
+        if (!selected) {
+          return {
+            success: false,
+            output: ['User cancelled dynamic combo selection.'],
+            failureDescription: 'Cancelled by user.'
+          };
+        }
+
+        context.setVariable(options.storeAs, selected);
+        return {
+          success: true,
+          output: [`Selected: ${selected}`]
         };
       }
     );

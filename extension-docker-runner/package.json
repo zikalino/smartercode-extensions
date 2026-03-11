@@ -30,26 +30,6 @@
     },
     "commands": [
       {
-        "command": "vscode-docker-runner.displayExplorer",
-        "title": "Docker Runner: Explorer"
-      },
-      {
-        "command": "vscode-docker-runner.displayDiscoverImages",
-        "title": "Docker Runner: Discover Images"
-      },
-      {
-        "command": "vscode-docker-runner.displayCreateContainers",
-        "title": "Docker Runner: Create Containers"
-      },
-      {
-        "command": "vscode-docker-runner.itemOperations",
-        "title": "Docker Runner: Operations"
-      },
-      {
-        "command": "vscode-docker-runner.refreshTree",
-        "title": "Docker Runner: Refresh"
-      },
-      {
         "command": "vscode-docker-runner.showWelcome",
         "title": "Docker Runner: Welcome"
       },

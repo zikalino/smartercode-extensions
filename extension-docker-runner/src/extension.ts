@@ -11,7 +11,8 @@ import {
   terminalDidClose,
   WebviewWorkflowInputProvider,
   WorkflowExecutionPlan,
-  WorkflowExecutionStep
+  WorkflowExecutionStep,
+  WorkflowExecutionContext
 } from '@upcloud/common';
 
 import * as helpers from '@zim.kalinowski/vscode-helper-toolkit';
@@ -667,16 +668,6 @@ export function activate(context: ExtensionContext): void {
     treeView,
     shellIntegrationDisposable,
     terminalCloseDisposable,
-    vscode.commands.registerCommand('vscode-docker-runner.displayExplorer', async () => {
-      await vscode.commands.executeCommand('workbench.view.explorer');
-      await vscode.commands.executeCommand(`${VIEW_ID}.focus`);
-    }),
-    vscode.commands.registerCommand('vscode-docker-runner.displayDiscoverImages', async () => {
-      await openFormView(context, 'docker/docker_image_import.yaml');
-    }),
-    vscode.commands.registerCommand('vscode-docker-runner.displayCreateContainers', async () => {
-      await openFormView(context, 'docker/docker_run.yaml');
-    }),
     vscode.commands.registerCommand('vscode-docker-runner.itemOperations', async (item?: TreeNode) => {
       await provider.runOperations(item);
     }),
@@ -775,6 +766,46 @@ function createContainerRegistryWorkflowExecutionPlan(): WorkflowExecutionPlan {
         return {
           success: true,
           output: [`Stored value in variable: ${options.storeAs}`]
+        };
+      },
+      [],
+      condition
+    ));
+  };
+
+  const addConditionalMultiTextEntryStep = (
+    options: Parameters<typeof WorkflowExecutionStep.createMultiTextEntryStep>[0],
+    condition: (variables: Record<string, unknown>) => boolean
+  ): void => {
+    plan.addStep(new WorkflowExecutionStep(
+      options.name,
+      options.description,
+      async context => {
+        const values = await context.getInputProvider().multiTextEntry(options, context);
+
+        if (values === null) {
+          return {
+            success: false,
+            output: ['User cancelled multi text entry.'],
+            failureDescription: 'Cancelled by user.'
+          };
+        }
+
+        for (const field of options.fields) {
+          const value = String(values[field.storeAs] ?? '');
+          if (field.required && value.trim() === '') {
+            return {
+              success: false,
+              output: [`Field '${field.label}' is required but empty.`],
+              failureDescription: 'Required input is empty.'
+            };
+          }
+          context.setVariable(field.storeAs, value);
+        }
+
+        return {
+          success: true,
+          output: [`Stored values for ${options.fields.length} fields.`]
         };
       },
       [],
@@ -1159,9 +1190,16 @@ function createContainerDeploymentWorkflowExecutionPlan(): WorkflowExecutionPlan
   const providerDigitalOcean = 'DigitalOcean App Platform';
   const providerUpCloud = 'UpCloud VM (Docker)';
   const providerStepVariable = 'deploy_provider';
+  const customImageReferenceOption = 'Custom Image Reference';
 
   const providerIs = (provider: string) =>
     (variables: Record<string, unknown>): boolean => String(variables[providerStepVariable] ?? '') === provider;
+
+  const selectedRegistryIsCustom =
+    (variables: Record<string, unknown>): boolean => String(variables.deploy_registry_name ?? '') === customImageReferenceOption;
+
+  const selectedRegistryIsNotCustom =
+    (variables: Record<string, unknown>): boolean => !selectedRegistryIsCustom(variables);
 
   const plan = new WorkflowExecutionPlan(
     'Container Deployment',
@@ -1207,6 +1245,46 @@ function createContainerDeploymentWorkflowExecutionPlan(): WorkflowExecutionPlan
     ));
   };
 
+  const addConditionalMultiTextEntryStep = (
+    options: Parameters<typeof WorkflowExecutionStep.createMultiTextEntryStep>[0],
+    condition: (variables: Record<string, unknown>) => boolean
+  ): void => {
+    plan.addStep(new WorkflowExecutionStep(
+      options.name,
+      options.description,
+      async context => {
+        const values = await context.getInputProvider().multiTextEntry(options, context);
+
+        if (values === null) {
+          return {
+            success: false,
+            output: ['User cancelled multi text entry.'],
+            failureDescription: 'Cancelled by user.'
+          };
+        }
+
+        for (const field of options.fields) {
+          const value = String(values[field.storeAs] ?? '');
+          if (field.required && value.trim() === '') {
+            return {
+              success: false,
+              output: [`Field '${field.label}' is required but empty.`],
+              failureDescription: 'Required input is empty.'
+            };
+          }
+          context.setVariable(field.storeAs, value);
+        }
+
+        return {
+          success: true,
+          output: [`Stored values for ${options.fields.length} fields.`]
+        };
+      },
+      [],
+      condition
+    ));
+  };
+
   plan.addStep(WorkflowExecutionStep.createSelectionStep({
     name: 'Provider Selection',
     description: 'Choose the provider where the container will run.',
@@ -1236,12 +1314,13 @@ function createContainerDeploymentWorkflowExecutionPlan(): WorkflowExecutionPlan
 
       const localOptions = entries.map(entry => `Local: ${entry.name}`);
       const publicOptions = PUBLIC_IMAGE_REGISTRIES.map(name => `Public: ${name}`);
-      context.setVariable('deploy_registry_options', [...localOptions, ...publicOptions]);
+      context.setVariable('deploy_registry_options', [...localOptions, ...publicOptions, customImageReferenceOption]);
       return {
         success: true,
         output: [
           `Local registries for ${registryProvider}: ${entries.length}`,
-          `Public registries available: ${publicOptions.length}`
+          `Public registries available: ${publicOptions.length}`,
+          'Custom image reference option available.'
         ]
       };
     }
@@ -1264,6 +1343,21 @@ function createContainerDeploymentWorkflowExecutionPlan(): WorkflowExecutionPlan
       const registryProvider = getRegistryProviderForDeploymentProvider(deploymentProvider);
       const selectedName = String(context.getVariable('deploy_registry_name') ?? '').trim();
 
+      if (selectedName === customImageReferenceOption) {
+        context.setVariable('selected_registry_provider', 'Custom');
+        context.setVariable('selected_registry_name', customImageReferenceOption);
+        context.setVariable('selected_registry_location', 'n/a');
+        context.setVariable('selected_registry_project_id', '');
+        context.setVariable('selected_registry_vm_name', '');
+        context.setVariable('selected_registry_resource_group', '');
+        context.setVariable('selected_registry_is_public', false);
+        context.setVariable('selected_registry_is_custom', true);
+        return {
+          success: true,
+          output: ['Registry source: Custom image reference']
+        };
+      }
+
       if (selectedName.startsWith('Public: ')) {
         const publicSource = selectedName.replace(/^Public:\s*/, '').trim();
         context.setVariable('selected_registry_provider', 'Public Registry');
@@ -1273,6 +1367,7 @@ function createContainerDeploymentWorkflowExecutionPlan(): WorkflowExecutionPlan
         context.setVariable('selected_registry_vm_name', '');
         context.setVariable('selected_registry_resource_group', '');
         context.setVariable('selected_registry_is_public', true);
+        context.setVariable('selected_registry_is_custom', false);
         return {
           success: true,
           output: [`Registry source: ${publicSource}`, 'Type: Public registry']
@@ -1297,6 +1392,7 @@ function createContainerDeploymentWorkflowExecutionPlan(): WorkflowExecutionPlan
       context.setVariable('selected_registry_vm_name', entry.vmName ?? '');
       context.setVariable('selected_registry_resource_group', entry.resourceGroup ?? '');
       context.setVariable('selected_registry_is_public', false);
+      context.setVariable('selected_registry_is_custom', false);
 
       return {
         success: true,
@@ -1305,91 +1401,56 @@ function createContainerDeploymentWorkflowExecutionPlan(): WorkflowExecutionPlan
     }
   ));
 
-  plan.addStep(WorkflowExecutionStep.createTextEntryStep({
-    name: 'Image Filter',
-    description: 'Optional filter used when querying images from selected registry.',
-    title: 'Image Filter',
+  plan.addStep(WorkflowExecutionStep.createDynamicComboSelectionStep({
+    name: 'Container Image Search & Selection',
+    description: 'Search and select a container image in one step. Suggestions refresh as you type.',
+    title: 'Container Image Search & Selection',
     placeHolder: 'e.g. api or web',
-    storeAs: 'image_filter',
-    required: false
-  }));
-
-  plan.addStep(new WorkflowExecutionStep(
-    'Query Available Images',
-    'Query a limited image list from selected registry.',
-    async context => {
+    storeAs: 'container_image',
+    queryProvider: async (filter: string, context: WorkflowExecutionContext) => {
       const provider = String(context.getVariable('selected_registry_provider') ?? '').trim();
       const name = String(context.getVariable('selected_registry_name') ?? '').trim();
       const location = String(context.getVariable('selected_registry_location') ?? '').trim();
       const projectId = String(context.getVariable('selected_registry_project_id') ?? '').trim();
       const vmName = String(context.getVariable('selected_registry_vm_name') ?? '').trim();
-      const filter = String(context.getVariable('image_filter') ?? '').trim().toLowerCase();
       const isPublic = context.getVariable('selected_registry_is_public') === true;
 
-      const queried = isPublic
-        ? await queryPublicRegistryImageCandidates(name, filter, 25)
-        : await queryRegistryImageCandidates(provider, name, location, projectId, vmName, 25);
-
-      const filtered = queried
-        .filter(item => filter === '' || item.toLowerCase().includes(filter))
-        .slice(0, 25);
-
-      const finalFallback = isPublic ? inferDefaultPublicImage(name) : `${name}:latest`;
-      const finalList = filtered.length > 0 ? filtered : [finalFallback];
-      context.setVariable('deploy_image_options', finalList);
-
-      return {
-        success: true,
-        output: [`Available images: ${finalList.length}${filter ? ` (filtered by '${filter}')` : ''}`]
-      };
+      if (isPublic) {
+        return await queryPublicRegistryImageCandidates(name, filter, 20);
+      } else {
+        return await queryRegistryImageCandidates(provider, name, location, projectId, vmName, 20);
+      }
     }
-  ));
-
-  plan.addStep(WorkflowExecutionStep.createSelectionStep({
-    name: 'Container Image',
-    description: 'Choose container image from selected registry list. Type to filter in the picker.',
-    title: 'Container Image',
-    placeHolder: 'Select image',
-    optionsFromVariable: 'deploy_image_options',
-    storeAs: 'container_image'
-  }));
-
-  plan.addStep(WorkflowExecutionStep.createConfirmStep({
-    name: 'Use Selected Image',
-    description: 'Keep selected image or switch to a custom image reference.',
-    message: 'Use selected image ${container_image}? Choose Cancel to enter a custom image reference.',
-    confirmLabel: 'Use Selected',
-    cancelLabel: 'Use Custom',
-    storeResultAs: 'use_selected_image'
   }));
 
   addConditionalTextEntryStep({
     name: 'Custom Container Image',
-    description: 'Override with a manually entered container image reference.',
+    description: 'Enter a full custom container image reference to deploy.',
     title: 'Custom Container Image',
     placeHolder: 'e.g. ghcr.io/my-org/my-app:1.2.3',
-    valueFromVariable: 'container_image',
     storeAs: 'container_image',
     required: true
-  }, (variables: Record<string, unknown>) => variables.use_selected_image !== true);
+  }, selectedRegistryIsCustom);
 
-  plan.addStep(WorkflowExecutionStep.createTextEntryStep({
-    name: 'Container Name',
-    description: 'Name used by provider-specific deployment target.',
-    title: 'Container Name',
-    placeHolder: 'e.g. hello-app',
-    storeAs: 'container_name',
-    required: true
-  }));
-
-  plan.addStep(WorkflowExecutionStep.createTextEntryStep({
-    name: 'Container Port',
-    description: 'Container port exposed by the workload.',
-    title: 'Container Port',
-    placeHolder: 'e.g. 80',
-    value: '80',
-    storeAs: 'container_port',
-    required: true
+  plan.addStep(WorkflowExecutionStep.createMultiTextEntryStep({
+    name: 'Container Creation Parameters',
+    description: 'Provide basic container runtime parameters in one step.',
+    title: 'Container Creation Parameters',
+    fields: [
+      {
+        label: 'Container Name',
+        placeHolder: 'e.g. hello-app',
+        storeAs: 'container_name',
+        required: true
+      },
+      {
+        label: 'Container Port',
+        placeHolder: 'e.g. 80',
+        value: '80',
+        storeAs: 'container_port',
+        required: true
+      }
+    ]
   }));
 
   plan.addStep(new WorkflowExecutionStep(
@@ -1405,32 +1466,31 @@ function createContainerDeploymentWorkflowExecutionPlan(): WorkflowExecutionPlan
     providerIs(providerAzure)
   ));
 
-  addConditionalTextEntryStep({
-    name: 'Azure Resource Group',
-    description: 'Resource group that will host the container instance.',
-    title: 'Azure Resource Group',
-    placeHolder: 'e.g. rg-containers',
-    storeAs: 'azure_resource_group',
-    required: true
-  }, providerIs(providerAzure));
-
-  addConditionalTextEntryStep({
-    name: 'Azure Location',
-    description: 'Azure region for Azure Container Instance.',
-    title: 'Azure Location',
-    placeHolder: 'e.g. eastus',
-    value: 'eastus',
-    storeAs: 'azure_location',
-    required: true
-  }, providerIs(providerAzure));
-
-  addConditionalTextEntryStep({
-    name: 'Azure DNS Label',
-    description: 'Public DNS label for the Azure Container Instance endpoint.',
-    title: 'Azure DNS Label',
-    value: '${container_name}',
-    storeAs: 'azure_dns_label',
-    required: true
+  addConditionalMultiTextEntryStep({
+    name: 'Azure Deployment Parameters',
+    description: 'Provide Azure deployment parameters in one step.',
+    title: 'Azure Deployment Parameters',
+    fields: [
+      {
+        label: 'Azure Resource Group',
+        placeHolder: 'e.g. rg-containers',
+        storeAs: 'azure_resource_group',
+        required: true
+      },
+      {
+        label: 'Azure Location',
+        placeHolder: 'e.g. eastus',
+        value: 'eastus',
+        storeAs: 'azure_location',
+        required: true
+      },
+      {
+        label: 'Azure DNS Label',
+        value: '${container_name}',
+        storeAs: 'azure_dns_label',
+        required: true
+      }
+    ]
   }, providerIs(providerAzure));
 
   plan.addStep(new WorkflowExecutionStep(

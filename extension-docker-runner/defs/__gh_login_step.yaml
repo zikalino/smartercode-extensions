@@ -1,5 +1,0 @@
-- type: 'action-row'
-  name: Login to GitHub
-  verify: gh auth status
-  behavior: interactive
-  install: gh auth login
