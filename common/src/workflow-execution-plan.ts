@@ -281,7 +281,8 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
       description: options.description,
       placeHolder: options.placeHolder ? context.resolveTemplate(options.placeHolder) : '',
       prompt: options.prompt ? context.resolveTemplate(options.prompt) : '',
-      value: context.resolveTemplate(initialValue)
+      value: context.resolveTemplate(initialValue),
+      required: !!options.required
     }) as { cancelled?: boolean; value?: string } | undefined;
 
     if (!response || response.cancelled) {
@@ -348,7 +349,8 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
       title: context.resolveTemplate(options.title),
       description: options.description,
       placeHolder: options.placeHolder ? context.resolveTemplate(options.placeHolder) : '',
-      items
+      items,
+      requireAtLeastOne: !!options.requireAtLeastOne
     }) as { cancelled?: boolean; values?: string[] } | undefined;
 
     if (!response || response.cancelled) {
@@ -544,6 +546,7 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
     input[type='text'], select { width: 100%; padding: 6px; box-sizing: border-box; }
     .actions { display: flex; gap: 8px; margin-top: 16px; }
     button { padding: 6px 12px; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
     .list { border: 1px solid var(--vscode-editorWidget-border); padding: 8px; max-height: 260px; overflow: auto; }
     label { display: block; margin: 4px 0; }
     .empty { color: var(--vscode-descriptionForeground); }
@@ -603,6 +606,14 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
           p.textContent = payload.prompt;
           content.prepend(p);
         }
+
+        const updateValidity = () => {
+          ok.disabled = payload.required === true && input.value.trim() === '';
+        };
+
+        input.addEventListener('input', updateValidity);
+        updateValidity();
+
         ok.onclick = () => vscode.postMessage({ type: 'submit', payload: { value: input.value } });
       }
 
@@ -635,6 +646,15 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
           content.appendChild(wrapper);
           entries.push({ input, field });
         });
+
+        const updateValidity = () => {
+          ok.disabled = entries.some(entry => entry.field.required && entry.input.value.trim() === '');
+        };
+
+        entries.forEach(entry => {
+          entry.input.addEventListener('input', updateValidity);
+        });
+        updateValidity();
 
         ok.onclick = () => {
           const values = {};
@@ -670,6 +690,22 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
           list.appendChild(label);
         });
         content.appendChild(list);
+
+        const updateValidity = () => {
+          if (payload.requireAtLeastOne !== true) {
+            ok.disabled = false;
+            return;
+          }
+
+          const selectedCount = Array.from(list.querySelectorAll('input[type="checkbox"]'))
+            .filter(input => input.checked)
+            .length;
+          ok.disabled = selectedCount === 0;
+        };
+
+        list.addEventListener('change', updateValidity);
+        updateValidity();
+
         ok.onclick = () => {
           const values = Array.from(list.querySelectorAll('input[type="checkbox"]'))
             .filter(input => input.checked)
@@ -692,6 +728,11 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
 
         let selectedValue = '';
         let debounceTimer = 0;
+
+        const updateValidity = () => {
+          const value = selectedValue || searchInput.value.trim();
+          ok.disabled = value === '';
+        };
 
         const renderOptions = (items) => {
           optionsList.innerHTML = '';
@@ -718,6 +759,7 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
               selectedValue = item;
               searchInput.value = item;
               searchInput.focus();
+              updateValidity();
             };
             optionsList.appendChild(div);
           });
@@ -731,8 +773,10 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
         renderOptions(payload.initialResults || []);
 
         searchInput.oninput = () => {
+          selectedValue = '';
           clearTimeout(debounceTimer);
           debounceTimer = window.setTimeout(performQuery, 250);
+          updateValidity();
         };
 
         searchInput.onkeydown = (e) => {
@@ -756,6 +800,7 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
         });
 
         ok.textContent = 'Select';
+        updateValidity();
         ok.onclick = () => {
           const value = selectedValue || searchInput.value.trim();
           if (!value) {
