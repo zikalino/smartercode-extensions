@@ -1,0 +1,474 @@
+import * as https from 'https';
+import { execFile } from 'child_process';
+import * as path from 'path';
+import { GraphModel } from './git-graph-types';
+
+export type GitGraphDataSource = 'local' | 'remote' | 'sample';
+
+export interface GitGraphFilter {
+  uri: string;
+  source: GitGraphDataSource;
+  localPath?: string;
+  remoteUrl?: string;
+  branches: string[];
+  files: string[];
+  commitRange?: string;
+}
+
+export interface GitDataProvider {
+  readonly kind: string;
+  canHandle(filter: GitGraphFilter): boolean;
+  getGraphSlice(filter: GitGraphFilter): Promise<GraphModel>;
+}
+
+function splitCsv(value: string | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function encodeCsv(values: string[]): string {
+  return values.join(',');
+}
+
+export function parseGitGraphUri(uri: string): GitGraphFilter {
+  const fallback: GitGraphFilter = {
+    uri,
+    source: 'local',
+    branches: [],
+    files: []
+  };
+
+  if (!uri.startsWith('gitgraph://')) {
+    return fallback;
+  }
+
+  const withoutPrefix = uri.slice('gitgraph://'.length);
+  const [sourceAndTarget, query = ''] = withoutPrefix.split('?');
+  const firstSlash = sourceAndTarget.indexOf('/');
+  const sourcePart = firstSlash >= 0 ? sourceAndTarget.slice(0, firstSlash) : sourceAndTarget;
+  const targetPart = firstSlash >= 0 ? sourceAndTarget.slice(firstSlash + 1) : '';
+  const source: GitGraphDataSource = sourcePart === 'remote' ? 'remote' : sourcePart === 'sample' ? 'sample' : 'local';
+
+  const params = new URLSearchParams(query);
+  const branches = splitCsv(params.get('branches') ?? undefined);
+  const files = splitCsv(params.get('files') ?? undefined);
+
+  return {
+    uri,
+    source,
+    localPath: source === 'local' ? decodeURIComponent(targetPart) : undefined,
+    remoteUrl: source === 'remote' ? decodeURIComponent(targetPart) : undefined,
+    branches,
+    files,
+    commitRange: params.get('range') ?? undefined
+  };
+}
+
+export function buildGitGraphUri(filter: GitGraphFilter): string {
+  const source = filter.source === 'remote' ? 'remote' : filter.source === 'sample' ? 'sample' : 'local';
+  const target = source === 'remote'
+    ? (filter.remoteUrl ?? '')
+    : source === 'sample'
+      ? ''
+      : (filter.localPath ?? '');
+  const params = new URLSearchParams();
+
+  if (filter.branches.length > 0) {
+    params.set('branches', encodeCsv(filter.branches));
+  }
+  if (filter.files.length > 0) {
+    params.set('files', encodeCsv(filter.files));
+  }
+  if (filter.commitRange && filter.commitRange.trim().length > 0) {
+    params.set('range', filter.commitRange.trim());
+  }
+
+  const query = params.toString();
+  return `gitgraph://${source}/${encodeURIComponent(target)}${query ? `?${query}` : ''}`;
+}
+
+export class LocalGitDataProvider implements GitDataProvider {
+  public readonly kind = 'local';
+
+  canHandle(filter: GitGraphFilter): boolean {
+    return filter.source === 'local';
+  }
+
+  async getGraphSlice(filter: GitGraphFilter): Promise<GraphModel> {
+    const repoRoot = await resolveRepositoryRoot(filter.localPath);
+    const fileSpecs = normalizeFileSpecs(filter.files);
+    const branchNames = filter.branches.length > 0 ? filter.branches : await listLocalBranches(repoRoot);
+    const commitRows = await listLocalCommits(repoRoot, filter.commitRange, fileSpecs);
+
+    if (commitRows.length === 0) {
+      throw new Error('No commits found for the selected local filter.');
+    }
+
+    const branchMembership = await buildBranchMembership(repoRoot, branchNames, fileSpecs);
+    const included = new Set(commitRows.map((row) => row.sha));
+
+    const commits = commitRows.map((row) => ({
+      id: shortSha(row.sha),
+      branch: findBranchForCommit(row.sha, branchNames, branchMembership),
+      parents: row.parents
+        .filter((parentSha) => included.has(parentSha))
+        .map((parentSha) => shortSha(parentSha)),
+      message: row.subject
+    }));
+
+    const branches = Array.from(new Set(commits.map((commit) => commit.branch)));
+    return { branches, commits };
+  }
+}
+
+export class RemoteGitDataProvider implements GitDataProvider {
+  public readonly kind = 'remote';
+
+  canHandle(filter: GitGraphFilter): boolean {
+    return filter.source === 'remote';
+  }
+
+  async getGraphSlice(filter: GitGraphFilter): Promise<GraphModel> {
+    const url = filter.remoteUrl ?? '';
+    const githubMatch = url.match(/github\.com[/:]([^/]+)\/([^/.]+?)(?:\.git)?(?:\/|$)/i);
+    if (!githubMatch) {
+      throw new Error(`Cannot fetch remote graph: unsupported URL format "${url}". Expected a GitHub URL like https://github.com/owner/repo`);
+    }
+
+    const owner = githubMatch[1];
+    const repo = githubMatch[2];
+
+    const branchNames = filter.branches.length > 0
+      ? filter.branches
+      : await this.fetchBranchNames(owner, repo);
+
+    const commitsByBranch = await Promise.all(
+      branchNames.map((branch) => this.fetchCommitsForBranch(owner, repo, branch, filter.commitRange))
+    );
+
+    const allById = new Map<string, { id: string; branch: string; parents: string[]; message: string }>();
+    for (let i = 0; i < branchNames.length; i++) {
+      for (const commit of commitsByBranch[i]) {
+        if (!allById.has(commit.id)) {
+          allById.set(commit.id, {
+            id: commit.id,
+            branch: branchNames[i],
+            parents: commit.parents,
+            message: commit.message
+          });
+        }
+      }
+    }
+
+    const commits = Array.from(allById.values());
+    const knownIds = new Set(commits.map((c) => c.id));
+    const normalized = commits.map((c) => ({
+      ...c,
+      parents: c.parents.filter((p) => knownIds.has(p))
+    }));
+
+    if (normalized.length === 0) {
+      throw new Error(`No commits found for ${owner}/${repo} with the given filter.`);
+    }
+
+    return {
+      branches: Array.from(new Set(normalized.map((c) => c.branch))),
+      commits: normalized
+    };
+  }
+
+  private fetchBranchNames(owner: string, repo: string): Promise<string[]> {
+    return new Promise((resolve, reject) => {
+      const options = {
+        hostname: 'api.github.com',
+        path: `/repos/${owner}/${repo}/branches?per_page=20`,
+        headers: { 'User-Agent': 'smartercode-git-graph', 'Accept': 'application/vnd.github+json' }
+      };
+      https.get(options, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => {
+          try {
+            const body = Buffer.concat(chunks).toString('utf8');
+            const data = JSON.parse(body) as unknown;
+            if (!Array.isArray(data)) {
+              reject(new Error(`GitHub API error: ${body.slice(0, 200)}`));
+              return;
+            }
+            resolve(data.map((b: { name: string }) => b.name).slice(0, 8));
+          } catch (err) {
+            reject(err);
+          }
+        });
+        res.on('error', reject);
+      }).on('error', reject);
+    });
+  }
+
+  private fetchCommitsForBranch(
+    owner: string, repo: string, branch: string, commitRange: string | undefined
+  ): Promise<{ id: string; parents: string[]; message: string }[]> {
+    return new Promise((resolve, reject) => {
+      const shaParam = commitRange ? `&sha=${encodeURIComponent(commitRange.split('..').pop() ?? branch)}` : `&sha=${encodeURIComponent(branch)}`;
+      const options = {
+        hostname: 'api.github.com',
+        path: `/repos/${owner}/${repo}/commits?per_page=30${shaParam}`,
+        headers: { 'User-Agent': 'smartercode-git-graph', 'Accept': 'application/vnd.github+json' }
+      };
+      https.get(options, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => {
+          try {
+            const body = Buffer.concat(chunks).toString('utf8');
+            const data = JSON.parse(body) as unknown;
+            if (!Array.isArray(data)) {
+              resolve([]);
+              return;
+            }
+            resolve(
+              data.map((c: { sha: string; parents: { sha: string }[]; commit?: { message?: string } }) => ({
+                id: c.sha.slice(0, 7),
+                parents: (c.parents ?? []).map((p: { sha: string }) => p.sha.slice(0, 7)),
+                message: String(c.commit?.message ?? '').split('\n')[0]
+              }))
+            );
+          } catch (err) {
+            reject(err);
+          }
+        });
+        res.on('error', reject);
+      }).on('error', reject);
+    });
+  }
+}
+
+export class GitDataProviderExample implements GitDataProvider {
+  public readonly kind = 'example';
+
+  canHandle(_filter: GitGraphFilter): boolean {
+    return true;
+  }
+
+  async getGraphSlice(filter: GitGraphFilter): Promise<GraphModel> {
+    // A richer sample graph: main, develop, feature/auth, feature/cache, hotfix/security, release/2.0
+    const full: GraphModel = {
+      branches: ['main', 'develop', 'feature/auth', 'feature/cache', 'hotfix/security', 'release/2.0'],
+      commits: [
+        // Initial main commits
+        { id: 'c001', branch: 'main', parents: [] },
+        { id: 'c002', branch: 'main', parents: ['c001'] },
+        { id: 'c003', branch: 'main', parents: ['c002'] },
+
+        // develop branches off from main
+        { id: 'd001', branch: 'develop', parents: ['c003'] },
+        { id: 'd002', branch: 'develop', parents: ['d001'] },
+        { id: 'd003', branch: 'develop', parents: ['d002'] },
+
+        // feature/auth branches off develop
+        { id: 'a001', branch: 'feature/auth', parents: ['d002'] },
+        { id: 'a002', branch: 'feature/auth', parents: ['a001'] },
+        { id: 'a003', branch: 'feature/auth', parents: ['a002'] },
+        { id: 'a004', branch: 'feature/auth', parents: ['a003'] },
+
+        // feature/cache branches off develop
+        { id: 'k001', branch: 'feature/cache', parents: ['d001'] },
+        { id: 'k002', branch: 'feature/cache', parents: ['k001'] },
+        { id: 'k003', branch: 'feature/cache', parents: ['k002'] },
+
+        // hotfix/security branches off main
+        { id: 'h001', branch: 'hotfix/security', parents: ['c002'] },
+        { id: 'h002', branch: 'hotfix/security', parents: ['h001'] },
+
+        // develop merges hotfix and feature/cache
+        { id: 'd004', branch: 'develop', parents: ['d003', 'h002'] },
+        { id: 'd005', branch: 'develop', parents: ['d004', 'k003'] },
+
+        // main merges hotfix
+        { id: 'c004', branch: 'main', parents: ['c003', 'h002'] },
+
+        // release/2.0 branches from develop
+        { id: 'r001', branch: 'release/2.0', parents: ['d005'] },
+        { id: 'r002', branch: 'release/2.0', parents: ['r001'] },
+        { id: 'r003', branch: 'release/2.0', parents: ['r002'] },
+
+        // feature/auth merges into develop
+        { id: 'd006', branch: 'develop', parents: ['d005', 'a004'] },
+
+        // develop merges into main
+        { id: 'c005', branch: 'main', parents: ['c004', 'd006'] },
+
+        // final polish on main
+        { id: 'c006', branch: 'main', parents: ['c005'] },
+        { id: 'c007', branch: 'main', parents: ['c006'] }
+      ]
+    };
+
+    return filterModel(full, filter);
+  }
+}
+
+type LocalCommitRow = {
+  sha: string;
+  parents: string[];
+  subject: string;
+};
+
+function normalizeFileSpecs(files: string[]): string[] {
+  return files
+    .map((file) => String(file).trim())
+    .filter((file) => file.length > 0)
+    .map((file) => file.replace(/\\/g, '/'));
+}
+
+function shortSha(sha: string): string {
+  return sha.slice(0, 10);
+}
+
+async function resolveRepositoryRoot(localPath: string | undefined): Promise<string> {
+  const candidates = [
+    localPath,
+    process.cwd()
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .map((value) => path.resolve(value));
+
+  for (const candidate of candidates) {
+    try {
+      const root = await runGit(candidate, ['rev-parse', '--show-toplevel']);
+      return root.trim();
+    } catch {
+      // try next candidate
+    }
+  }
+
+  throw new Error(`Unable to resolve repository root for path "${localPath ?? ''}".`);
+}
+
+async function listLocalBranches(repoRoot: string): Promise<string[]> {
+  const output = await runGit(repoRoot, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']);
+  const branches = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  return branches.slice(0, 8);
+}
+
+async function listLocalCommits(
+  repoRoot: string,
+  commitRange: string | undefined,
+  fileSpecs: string[]
+): Promise<LocalCommitRow[]> {
+  const range = (commitRange ?? '').trim();
+  const args = ['log', '--max-count=180', '--pretty=format:%H%x09%P%x09%s'];
+
+  if (range.length > 0) {
+    args.push(range);
+  } else {
+    args.push('--all');
+  }
+
+  if (fileSpecs.length > 0) {
+    args.push('--', ...fileSpecs);
+  }
+
+  const output = await runGit(repoRoot, args);
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const [sha = '', parents = '', ...subjectParts] = line.split('\t');
+      return {
+        sha,
+        parents: parents.length > 0 ? parents.split(' ').filter((part) => part.length > 0) : [],
+        subject: subjectParts.join('\t').trim()
+      };
+    })
+    .filter((row) => row.sha.length > 0);
+}
+
+async function buildBranchMembership(
+  repoRoot: string,
+  branchNames: string[],
+  fileSpecs: string[]
+): Promise<Map<string, Set<string>>> {
+  const membership = new Map<string, Set<string>>();
+
+  await Promise.all(branchNames.map(async (branchName) => {
+    const args = ['rev-list', '--max-count=700', branchName];
+    if (fileSpecs.length > 0) {
+      args.push('--', ...fileSpecs);
+    }
+
+    try {
+      const output = await runGit(repoRoot, args);
+      const shas = output
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+      membership.set(branchName, new Set(shas));
+    } catch {
+      membership.set(branchName, new Set());
+    }
+  }));
+
+  return membership;
+}
+
+function findBranchForCommit(
+  sha: string,
+  branchNames: string[],
+  membership: Map<string, Set<string>>
+): string {
+  for (const branchName of branchNames) {
+    if (membership.get(branchName)?.has(sha)) {
+      return branchName;
+    }
+  }
+
+  return branchNames[0] ?? 'main';
+}
+
+async function runGit(cwd: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('git', ['-C', cwd, ...args], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr || error.message));
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}
+
+function filterModel(model: GraphModel, filter: GitGraphFilter): GraphModel {
+  if (filter.branches.length === 0) {
+    return model;
+  }
+
+  const branchSet = new Set(filter.branches);
+  const commits = model.commits.filter((commit) => branchSet.has(commit.branch));
+  const ids = new Set(commits.map((commit) => commit.id));
+
+  const normalizedCommits = commits.map((commit) => ({
+    ...commit,
+    parents: commit.parents.filter((parentId) => ids.has(parentId))
+  }));
+
+  if (normalizedCommits.length === 0) {
+    return model;
+  }
+
+  return {
+    branches: Array.from(new Set(normalizedCommits.map((commit) => commit.branch))),
+    commits: normalizedCommits
+  };
+}

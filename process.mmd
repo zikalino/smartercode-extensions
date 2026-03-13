@@ -1,0 +1,23 @@
+%%{init: {'themeVariables': {'fontSize': '22px'}} }%%
+flowchart TD
+    S1[Import new Chromium TAG to upstream]
+    S2[Copy existing patchset to the new TAG]
+    S3[Verify patches\nextract resolve fragments]
+    S4[Ask Copilot to resolve\nnon-matching fragments]
+    S5[Create upstream-TAG-applied branch\nand apply resolved patches]
+    S6[Merge apply branch into master-next]
+    S7[Run build configuration]
+    D8{Config OK?}
+    S8b[Ask Copilot to solve\nconfig problems]
+    S9[Commit configuration fixes]
+    S10[Run ninja build]
+    D11{Ninja build OK?}
+    S11b[Ask Copilot to fix\nbuild problems]
+    S12[Commit build fixes]
+    S13[[ Redistribute fixes to patchset\n— separate process —]]
+
+    S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> D8
+    D8 -- Fails --> S8b --> S7
+    D8 -- OK --> S9 --> S10 --> D11
+    D11 -- Fails --> S11b --> S10
+    D11 -- OK --> S12 --> S13

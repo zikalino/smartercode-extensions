@@ -1,5 +1,4 @@
-```mermaid
-%%{init: {'gitGraph': {'mainBranchName': 'master'}} }%%
+%%{init: {'gitGraph': {'mainBranchName': 'master'}, 'themeVariables': {'fontSize': '12px'}} }%%
 gitGraph
   commit id: "A"
   branch master-next
@@ -20,6 +19,8 @@ gitGraph
   merge master
   checkout master
   merge master-next
+  commit id: "master-random-7632-1"
+  commit id: "master-random-7632-2"
   checkout master-next
   merge upstream-145.0.7632.0-applied
   commit id: "squash-upstream-145.0.7632.0-applied"
@@ -38,6 +39,8 @@ gitGraph
   merge master
   checkout master
   merge master-next
+  commit id: "master-random-7640-1"
+  commit id: "master-random-7640-2"
   checkout master-next
   merge upstream-145.0.7640.0-applied
   commit id: "squash-upstream-145.0.7640.0-applied"
@@ -56,6 +59,8 @@ gitGraph
   merge master
   checkout master
   merge master-next
+  commit id: "master-random-7650-1"
+  commit id: "master-random-7650-2"
   checkout master-next
   merge upstream-145.0.7650.0-applied
   commit id: "squash-upstream-145.0.7650.0-applied"
@@ -74,6 +79,8 @@ gitGraph
   merge master
   checkout master
   merge master-next
+  commit id: "master-random-7660-1"
+  commit id: "master-random-7660-2"
   checkout master-next
   merge upstream-145.0.7660.0-applied
   commit id: "squash-upstream-145.0.7660.0-applied"
@@ -88,4 +95,3 @@ gitGraph
   commit id: "patches-145.0.7660.0-applied"
   checkout master-next
   commit id: "D"
-```

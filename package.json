@@ -3,13 +3,9 @@
   "private": true,
   "workspaces": [
     "common",
-    "extension-map-designer",
     "extension-example",
-    "extension-river-raid",
-    "extension-boulder-dash",
-    "extension-dungeon-crawler",
-    "extension-pitfall-adventure",
-    "extension-docker-runner"
+    "extension-docker-runner",
+    "extension-git-slice"
   ],
   "scripts": {
     "compile": "tsc -b",

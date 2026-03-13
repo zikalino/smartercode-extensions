@@ -16,17 +16,6 @@
       }
     },
     {
-      "label": "watch: extension-map-designer",
-      "type": "npm",
-      "script": "watch",
-      "path": "extension-map-designer",
-      "problemMatcher": "$tsc-watch",
-      "isBackground": true,
-      "presentation": {
-        "reveal": "never"
-      }
-    },
-    {
       "label": "watch: extension-example",
       "type": "npm",
       "script": "watch",
@@ -47,13 +36,6 @@
       "presentation": {
         "reveal": "never"
       }
-    },
-    {
-      "label": "build: extension-map-designer",
-      "type": "npm",
-      "script": "compile",
-      "path": "extension-map-designer",
-      "problemMatcher": "$tsc"
     },
     {
       "label": "build: extension-example",

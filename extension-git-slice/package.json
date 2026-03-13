@@ -1,0 +1,49 @@
+{
+  "name": "extension-git-slice",
+  "displayName": "Git Slice",
+  "description": "Open git history slices for workspace and files.",
+  "version": "0.0.1",
+  "publisher": "local-dev",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "gitSlice.openView",
+        "title": "Git Slice: Open View"
+      },
+      {
+        "command": "gitSlice.showGitContext",
+        "title": "Git Slice: Graph"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "gitSlice.showGitContext",
+          "when": "resourceScheme == file",
+          "group": "navigation@20"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "gitSlice.showGitContext",
+          "when": "resourceScheme == file",
+          "group": "navigation@20"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -b",
+    "watch": "tsc -b -w"
+  },
+  "dependencies": {
+    "@upcloud/common": "0.0.1"
+  }
+}

@@ -9,3 +9,22 @@ It recently came to my attention that one of my extensions created 7 years ago i
 Here's a starting point!
 
 Read more here: https://zikalino.substack.com/p/reviving-docker-runner-vscode-extension
+
+## Mermaid customization workflow
+
+Docker Runner uses a local Mermaid bundle for the diagram viewer.
+
+- TypeScript source: `media-src/mermaid-custom.ts`
+- Output bundle consumed by webview: `media/mermaid.min.js`
+
+Commands:
+
+- `npm run build:mermaid` builds a minified production bundle.
+- `npm run build:mermaid:dev` builds a readable development bundle.
+
+Examples:
+
+```bash
+npm --workspace extension-docker-runner run build:mermaid:dev
+npm --workspace extension-docker-runner run build:mermaid
+```

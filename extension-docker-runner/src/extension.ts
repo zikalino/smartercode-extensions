@@ -9,6 +9,8 @@ import {
   executeFlow,
   terminalChangedShellIntegration,
   terminalDidClose,
+  GitGraphPanel,
+  MermaidDiagramViewer,
   WebviewWorkflowInputProvider,
   WorkflowExecutionPlan,
   WorkflowExecutionStep,
@@ -658,6 +660,22 @@ async function openFormView(
 
 export function activate(context: ExtensionContext): void {
   const provider = new DockerTreeProvider(context);
+  const mermaidViewer = new MermaidDiagramViewer({
+    panelId: 'vscode-docker-runner.mermaid-viewer',
+    title: 'Docker Runner Diagram Viewer',
+    extensionUri: context.extensionUri,
+    mermaidScriptPath: 'media/mermaid.min.js'
+  });
+  const gitGraphPanel = new GitGraphPanel({
+    panelId: 'vscode-docker-runner.git-graph-viewer',
+    title: 'Docker Runner Git Graph',
+    branchLaneDistance: 25,
+    commitVerticalDistance: 25,
+    strokeWidth: 2.5,
+    onCommitClick: (commitId, branch) => {
+      void vscode.window.showInformationMessage(`Clicked ${commitId} on ${branch}`);
+    }
+  });
   const treeView = vscode.window.createTreeView(VIEW_ID, { treeDataProvider: provider, showCollapseAll: true });
   const shellIntegrationDisposable = vscode.window.onDidChangeTerminalShellIntegration(event => {
     terminalChangedShellIntegration(event.shellIntegration);
@@ -685,8 +703,38 @@ export function activate(context: ExtensionContext): void {
     vscode.commands.registerCommand('vscode-docker-runner.createContainer', async () => {
       const plan = createContainerDeploymentWorkflowExecutionPlan();
       await executeFlow(plan, new WebviewWorkflowInputProvider());
+    }),
+    vscode.commands.registerCommand('vscode-docker-runner.showMermaidExample', () => {
+      mermaidViewer.show(`flowchart TD
+    A[Dockerfile] --> B[Build image]
+    B --> C[Push to registry]
+    C --> D[Deploy container]
+    D --> E[Health check]
+    E -->|pass| F[Traffic enabled]
+    E -->|fail| G[Rollback]`);
+    }),
+    vscode.commands.registerCommand('vscode-docker-runner.showGitGraphExample', () => {
+      gitGraphPanel.show(`%%{init: {'gitGraph': {'mainBranchName': 'main'}} }%%
+gitGraph
+  commit id: "A"
+  branch patches
+  checkout main
+  commit id: "ver1-a"
+  checkout patches
+  commit id: "ver1-b"
+  checkout main
+  commit id: "ver2-a"
+  checkout patches
+  commit id: "ver2-b"
+  checkout main
+  commit id: "ver3-a"
+  checkout patches
+  commit id: "ver3-b"
+  `);
     })
   );
+
+  context.subscriptions.push(mermaidViewer, gitGraphPanel);
 
   treeView.onDidChangeSelection((event) => {
     provider.setSelectedItem(event.selection[0]);

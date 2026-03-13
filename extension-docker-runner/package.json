@@ -40,6 +40,14 @@
       {
         "command": "vscode-docker-runner.createContainer",
         "title": "Docker Runner: Create Container"
+      },
+      {
+        "command": "vscode-docker-runner.showMermaidExample",
+        "title": "Docker Runner: Show Mermaid Example"
+      },
+      {
+        "command": "vscode-docker-runner.showGitGraphExample",
+        "title": "Docker Runner: Show Git Graph Example"
       }
     ],
     "menus": {
@@ -70,13 +78,20 @@
           "command": "vscode-docker-runner.refreshTree",
           "when": "view == vscode-docker-runner.tree",
           "group": "navigation"
+        },
+        {
+          "command": "vscode-docker-runner.showGitGraphExample",
+          "when": "view == vscode-docker-runner.tree",
+          "group": "navigation@1"
         }
       ]
     }
   },
   "scripts": {
     "compile": "tsc -b",
-    "watch": "tsc -b -w"
+    "watch": "tsc -b -w",
+    "build:mermaid": "esbuild media-src/mermaid-custom.ts --bundle --platform=browser --format=iife --target=es2020 --minify --outfile=media/mermaid.min.js",
+    "build:mermaid:dev": "esbuild media-src/mermaid-custom.ts --bundle --platform=browser --format=iife --target=es2020 --outfile=media/mermaid.min.js"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.6",
@@ -91,11 +106,12 @@
     "eslint": "^8.54.0",
     "jsdom": "^24.0.0",
     "jsdom-global": "^3.0.2",
+    "mermaid": "^11.13.0",
     "typescript": "^5.3.2"
   },
   "dependencies": {
-    "@upcloud/common": "0.0.1",
     "@apidevtools/swagger-parser": "^10.1.0",
+    "@upcloud/common": "0.0.1",
     "@vscode/codicons": "0.0.20",
     "@vscode/webview-ui-toolkit": "^1.4.0",
     "@zim.kalinowski/vscode-helper-toolkit": "^0.1.6",

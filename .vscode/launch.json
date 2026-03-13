@@ -2,19 +2,6 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run UpCloud Extension",
-      "type": "extensionHost",
-      "request": "launch",
-      "runtimeExecutable": "${execPath}",
-      "args": [
-        "--extensionDevelopmentPath=${workspaceFolder}/extension-map-designer"
-      ],
-      "outFiles": [
-        "${workspaceFolder}/extension-map-designer/out/**/*.js"
-      ],
-      "preLaunchTask": "npm: watch"
-    },
-    {
       "name": "Run Example Extension",
       "type": "extensionHost",
       "request": "launch",
@@ -28,58 +15,6 @@
       "preLaunchTask": "npm: watch"
     },
     {
-      "name": "Run River Raid Extension",
-      "type": "extensionHost",
-      "request": "launch",
-      "runtimeExecutable": "${execPath}",
-      "args": [
-        "--extensionDevelopmentPath=${workspaceFolder}/extension-river-raid"
-      ],
-      "outFiles": [
-        "${workspaceFolder}/extension-river-raid/out/**/*.js"
-      ],
-      "preLaunchTask": "npm: watch"
-    },
-    {
-      "name": "Run Boulder Dash Extension",
-      "type": "extensionHost",
-      "request": "launch",
-      "runtimeExecutable": "${execPath}",
-      "args": [
-        "--extensionDevelopmentPath=${workspaceFolder}/extension-boulder-dash"
-      ],
-      "outFiles": [
-        "${workspaceFolder}/extension-boulder-dash/out/**/*.js"
-      ],
-      "preLaunchTask": "npm: watch"
-    },
-    {
-      "name": "Run Dungeon Crawler Extension",
-      "type": "extensionHost",
-      "request": "launch",
-      "runtimeExecutable": "${execPath}",
-      "args": [
-        "--extensionDevelopmentPath=${workspaceFolder}/extension-dungeon-crawler"
-      ],
-      "outFiles": [
-        "${workspaceFolder}/extension-dungeon-crawler/out/**/*.js"
-      ],
-      "preLaunchTask": "npm: watch"
-    },
-    {
-      "name": "Run Pitfall Adventure Extension",
-      "type": "extensionHost",
-      "request": "launch",
-      "runtimeExecutable": "${execPath}",
-      "args": [
-        "--extensionDevelopmentPath=${workspaceFolder}/extension-pitfall-adventure"
-      ],
-      "outFiles": [
-        "${workspaceFolder}/extension-pitfall-adventure/out/**/*.js"
-      ],
-      "preLaunchTask": "npm: watch"
-    },
-    {
       "name": "Run Docker Runner Extension",
       "type": "extensionHost",
       "request": "launch",
@@ -89,6 +24,19 @@
       ],
       "outFiles": [
         "${workspaceFolder}/extension-docker-runner/out/**/*.js"
+      ],
+      "preLaunchTask": "npm: watch"
+    },
+    {
+      "name": "Run Git Slice Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/extension-git-slice"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/extension-git-slice/out/**/*.js"
       ],
       "preLaunchTask": "npm: watch"
     }
