@@ -103,7 +103,8 @@ export class LocalGitDataProvider implements GitDataProvider {
   async getGraphSlice(filter: GitGraphFilter): Promise<GraphModel> {
     const repoRoot = await resolveRepositoryRoot(filter.localPath);
     const fileSpecs = normalizeFileSpecs(filter.files);
-    const branchNames = filter.branches.length > 0 ? filter.branches : await listLocalBranches(repoRoot);
+    const availableBranchNames = await listLocalBranches(repoRoot);
+    const branchNames = filter.branches.length > 0 ? filter.branches : availableBranchNames;
     const commitRows = await listLocalCommits(repoRoot, filter.commitRange, fileSpecs);
     let tagsByCommitSha = new Map<string, string[]>();
     try {
@@ -132,12 +133,18 @@ export class LocalGitDataProvider implements GitDataProvider {
       throw new Error('No commits found for the selected local filter.');
     }
 
-    const branchMembership = await buildBranchMembership(repoRoot, branchNames, fileSpecs);
+    const branchMembership = await buildBranchMembership(repoRoot, availableBranchNames, fileSpecs);
     const included = new Set(commitRows.map((row) => row.sha));
 
     const commits = commitRows.map((row) => ({
+      branches: findBranchesForCommit(row.sha, availableBranchNames, branchMembership),
       id: shortSha(row.sha),
-      branch: findBranchForCommit(row.sha, branchNames, branchMembership),
+      branch: findPreferredBranchForCommit(
+        row.sha,
+        branchNames,
+        availableBranchNames,
+        branchMembership
+      ),
       parents: row.parents
         .filter((parentSha) => included.has(parentSha))
         .map((parentSha) => shortSha(parentSha)),
@@ -177,13 +184,14 @@ export class RemoteGitDataProvider implements GitDataProvider {
       branchNames.map((branch) => this.fetchCommitsForBranch(owner, repo, branch, filter.commitRange))
     );
 
-    const allById = new Map<string, { id: string; branch: string; parents: string[]; message: string }>();
+    const allById = new Map<string, { id: string; branch: string; branches: string[]; parents: string[]; message: string }>();
     for (let i = 0; i < branchNames.length; i++) {
       for (const commit of commitsByBranch[i]) {
         if (!allById.has(commit.id)) {
           allById.set(commit.id, {
             id: commit.id,
             branch: branchNames[i],
+            branches: [branchNames[i]],
             parents: commit.parents,
             message: commit.message
           });
@@ -532,6 +540,36 @@ function findBranchForCommit(
   return branchNames[0] ?? 'main';
 }
 
+function findBranchesForCommit(
+  sha: string,
+  branchNames: string[],
+  membership: Map<string, Set<string>>
+): string[] {
+  const matches: string[] = [];
+  for (const branchName of branchNames) {
+    if (membership.get(branchName)?.has(sha)) {
+      matches.push(branchName);
+    }
+  }
+
+  return matches;
+}
+
+function findPreferredBranchForCommit(
+  sha: string,
+  preferredBranchNames: string[],
+  allBranchNames: string[],
+  membership: Map<string, Set<string>>
+): string {
+  for (const branchName of preferredBranchNames) {
+    if (membership.get(branchName)?.has(sha)) {
+      return branchName;
+    }
+  }
+
+  return findBranchForCommit(sha, allBranchNames, membership);
+}
+
 async function runGit(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile('git', ['-C', cwd, ...args], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }, (error, stdout, stderr) => {
@@ -550,9 +588,23 @@ function filterModel(model: GraphModel, filter: GitGraphFilter): GraphModel {
   }
 
   const branchSet = new Set(filter.branches);
-  const commits = model.commits.filter((commit) => branchSet.has(commit.branch));
+  const commits = model.commits.filter((commit) => {
+    if (branchSet.has(commit.branch)) {
+      return true;
+    }
+
+    const memberships = Array.isArray(commit.branches) ? commit.branches : [];
+    return memberships.some((branchName) => branchSet.has(branchName));
+  });
   const ids = new Set(commits.map((commit) => commit.id));
-  const removedCommits = model.commits.filter((commit) => !branchSet.has(commit.branch));
+  const removedCommits = model.commits.filter((commit) => {
+    if (branchSet.has(commit.branch)) {
+      return false;
+    }
+
+    const memberships = Array.isArray(commit.branches) ? commit.branches : [];
+    return !memberships.some((branchName) => branchSet.has(branchName));
+  });
   const removedChildCountByParentId = new Map<string, number>();
 
   removedCommits.forEach((commit) => {
@@ -567,6 +619,15 @@ function filterModel(model: GraphModel, filter: GitGraphFilter): GraphModel {
 
   const normalizedCommits = commits.map((commit) => ({
     ...commit,
+    branch: (() => {
+      const memberships = Array.isArray(commit.branches) ? commit.branches : [];
+      for (const branchName of memberships) {
+        if (branchSet.has(branchName)) {
+          return branchName;
+        }
+      }
+      return commit.branch;
+    })(),
     parents: commit.parents.filter((parentId) => ids.has(parentId)),
     hiddenParentCount: (commit.hiddenParentCount ?? 0)
       + commit.parents.filter((parentId) => !ids.has(parentId)).length,

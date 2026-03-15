@@ -514,6 +514,16 @@ export class GitGraphPanel implements vscode.Disposable {
       stroke-width: 2;
     }
 
+    #commitGraph circle.merge {
+      fill: var(--vscode-editor-background);
+      stroke-width: 2.4;
+    }
+
+    #commitGraph circle.mergeInner {
+      pointer-events: none;
+      stroke: none;
+    }
+
     #commitGraph circle:not(.current) {
       stroke: var(--vscode-editor-background);
       stroke-width: 1;
@@ -712,6 +722,11 @@ export class GitGraphPanel implements vscode.Disposable {
       outline: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 60%, transparent);
     }
 
+    .commit:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: -1px;
+    }
+
     .commit-id {
       font-family: var(--vscode-editor-font-family);
       font-size: 12px;
@@ -728,6 +743,19 @@ export class GitGraphPanel implements vscode.Disposable {
       line-height: 16px;
     }
 
+    .commit-branch-extra {
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      opacity: 0.86;
+    }
+
+    .commit-branch-extra:hover {
+      opacity: 1;
+      background: color-mix(in srgb, var(--vscode-toolbar-hoverBackground) 80%, transparent);
+      border-color: color-mix(in srgb, var(--vscode-focusBorder) 55%, transparent);
+    }
+
     .commit-tag {
       font-size: 10px;
       line-height: 14px;
@@ -740,6 +768,18 @@ export class GitGraphPanel implements vscode.Disposable {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    .commit-merge {
+      font-size: 10px;
+      line-height: 14px;
+      padding: 0 6px;
+      border-radius: 10px;
+      border: 1px solid color-mix(in srgb, var(--vscode-charts-yellow) 62%, var(--vscode-editorWidget-border));
+      background: color-mix(in srgb, var(--vscode-charts-yellow) 16%, transparent);
+      color: color-mix(in srgb, var(--vscode-charts-yellow) 95%, var(--vscode-foreground));
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
     }
 
     .commit-message {
@@ -779,14 +819,6 @@ export class GitGraphPanel implements vscode.Disposable {
       background: color-mix(in srgb, var(--vscode-toolbar-hoverBackground) 88%, transparent);
       border-color: color-mix(in srgb, var(--vscode-focusBorder) 65%, transparent);
       opacity: 1;
-    }
-
-    #commitGraph circle.selected {
-      filter: saturate(1.2);
-    }
-
-    #commitGraph .selection-decorators {
-      pointer-events: none;
     }
 
     .error {
@@ -977,6 +1009,32 @@ export class GitGraphPanel implements vscode.Disposable {
         files: filter.files,
         commitRange: filter.commitRange
       });
+    }
+
+    function requestAddBranchToFilter(branchName) {
+      const normalized = String(branchName || '').trim();
+      if (!normalized) {
+        return;
+      }
+
+      const branchesInput = document.getElementById('filterBranches');
+      if (!branchesInput) {
+        return;
+      }
+
+      const confirmed = window.confirm('Add branch "' + normalized + '" to the graph filter?');
+      if (!confirmed) {
+        return;
+      }
+
+      const currentBranches = parseCsvInput(branchesInput.value);
+      if (!currentBranches.includes(normalized)) {
+        currentBranches.push(normalized);
+      }
+      branchesInput.value = currentBranches.join(',');
+
+      const filter = collectHeaderFilter();
+      applyHeaderFilter(filter, 'Adding branch: ');
     }
 
     function increaseTildeDepth(ref, increment, fallbackBase) {
@@ -1334,6 +1392,7 @@ export class GitGraphPanel implements vscode.Disposable {
     let fallbackTooltip = null;
     let fallbackActiveId = null;
     const selectedCommitIndexes = new Set();
+    let focusedCommitIndex = null;
 
     function showError(message) {
       const notice = document.createElement('div');
@@ -1621,16 +1680,6 @@ export class GitGraphPanel implements vscode.Disposable {
         const idValue = Number(row.dataset.id);
         row.classList.toggle('selected', Number.isInteger(idValue) && selectedCommitIndexes.has(idValue));
       });
-
-      const circles = document.querySelectorAll('#commitGraph circle[data-id]');
-      circles.forEach((circle) => {
-        const idValue = Number(circle.dataset.id);
-        const isSelected = Number.isInteger(idValue) && selectedCommitIndexes.has(idValue);
-        circle.classList.toggle('selected', isSelected);
-        applySelectedCircleStyle(circle, isSelected);
-      });
-
-      renderSelectionDecorations(currentModel, currentFallbackLayout);
     }
 
     function getSelectionStrokeColor() {
@@ -1809,6 +1858,8 @@ export class GitGraphPanel implements vscode.Disposable {
       }
 
       applySelectionState();
+      focusedCommitIndex = index;
+      syncCommitRowTabStops();
     }
 
     function getSelectedCommitIds(model) {
@@ -1816,6 +1867,148 @@ export class GitGraphPanel implements vscode.Disposable {
         .sort((a, b) => a - b)
         .map((index) => model.commits[index]?.id)
         .filter((id) => typeof id === 'string');
+    }
+
+    function getCommitRowByIndex(index) {
+      return tableElem.querySelector('.commit[data-id="' + String(index) + '"]');
+    }
+
+    function syncCommitRowTabStops() {
+      const rows = getCommitElems();
+      const selectedIndexes = Array.from(selectedCommitIndexes).sort((a, b) => a - b);
+      const fallbackIndex = selectedIndexes.length > 0
+        ? selectedIndexes[0]
+        : (() => {
+            const firstRow = rows[0];
+            if (!firstRow) {
+              return null;
+            }
+            const firstId = Number(firstRow.dataset.id);
+            return Number.isInteger(firstId) ? firstId : null;
+          })();
+      const activeIndex = focusedCommitIndex !== null ? focusedCommitIndex : fallbackIndex;
+
+      rows.forEach((row) => {
+        const idValue = Number(row.dataset.id);
+        const isActive = Number.isInteger(idValue) && idValue === activeIndex;
+        row.tabIndex = isActive ? 0 : -1;
+        row.setAttribute('aria-selected', selectedCommitIndexes.has(idValue) ? 'true' : 'false');
+      });
+    }
+
+    function focusCommitRow(index, options) {
+      const settings = options || {};
+      if (!Number.isInteger(index)) {
+        return;
+      }
+
+      const row = getCommitRowByIndex(index);
+      if (!row) {
+        return;
+      }
+
+      focusedCommitIndex = index;
+      syncCommitRowTabStops();
+      row.focus({ preventScroll: Boolean(settings.preventScroll) });
+      if (!settings.preventReveal) {
+        row.scrollIntoView({ block: 'nearest' });
+      }
+    }
+
+    function moveFocusOnly(model, index, delta) {
+      const rows = getCommitElems();
+      const currentRow = getCommitRowByIndex(index);
+      const currentPosition = currentRow ? rows.indexOf(currentRow) : -1;
+      if (currentPosition < 0) {
+        return;
+      }
+
+      const nextPosition = Math.max(0, Math.min(rows.length - 1, currentPosition + delta));
+      const nextRow = rows[nextPosition];
+      if (!nextRow) {
+        return;
+      }
+
+      const nextIndex = Number(nextRow.dataset.id);
+      if (!Number.isInteger(nextIndex) || nextIndex < 0 || nextIndex >= model.commits.length) {
+        return;
+      }
+
+      focusCommitRow(nextIndex);
+    }
+
+    function expandSelectionAndMoveFocus(model, index, delta) {
+      const rows = getCommitElems();
+      const currentRow = getCommitRowByIndex(index);
+      const currentPosition = currentRow ? rows.indexOf(currentRow) : -1;
+      if (currentPosition < 0) {
+        return;
+      }
+
+      const nextPosition = Math.max(0, Math.min(rows.length - 1, currentPosition + delta));
+      const nextRow = rows[nextPosition];
+      if (!nextRow) {
+        return;
+      }
+
+      const nextIndex = Number(nextRow.dataset.id);
+      if (!Number.isInteger(nextIndex) || nextIndex < 0 || nextIndex >= model.commits.length) {
+        return;
+      }
+
+      if (selectedCommitIndexes.has(nextIndex)) {
+        selectedCommitIndexes.delete(nextIndex);
+      } else {
+        selectedCommitIndexes.add(nextIndex);
+      }
+      applySelectionState();
+      focusCommitRow(nextIndex);
+    }
+
+    function focusCommitBoundary(model, boundary) {
+      const rows = getCommitElems();
+      const row = boundary === 'start' ? rows[0] : rows[rows.length - 1];
+      if (!row) {
+        return;
+      }
+
+      const index = Number(row.dataset.id);
+      if (!Number.isInteger(index) || index < 0 || index >= model.commits.length) {
+        return;
+      }
+
+      focusCommitRow(index);
+    }
+
+    function invokeCommit(model, index) {
+      const commit = model.commits[index];
+      if (!commit) {
+        return;
+      }
+
+      setCommitSelection(model, index, false);
+      focusCommitRow(index, { preventReveal: true });
+      vscode.postMessage({
+        type: 'commit-click',
+        commitId: commit.id,
+        branch: commit.branch
+      });
+    }
+
+    function openCommitContextMenu(model, index, preserveMultiSelect) {
+      const commit = model.commits[index];
+      if (!commit) {
+        return;
+      }
+
+      setCommitSelection(model, index, Boolean(preserveMultiSelect));
+      focusCommitRow(index, { preventReveal: true });
+      vscode.postMessage({
+        type: 'commit-context-menu',
+        commitId: commit.id,
+        branch: commit.branch,
+        selectedCommitIds: getSelectedCommitIds(model)
+      });
     }
 
     function createCurvePath(parent, child) {
@@ -2041,21 +2234,32 @@ export class GitGraphPanel implements vscode.Disposable {
           continue;
         }
 
+        const isMerge = Array.isArray(commit.parents) && commit.parents.length > 1;
+        const branchColor = COLORS[node.branchColorIndex % COLORS.length];
+
         const circle = document.createElementNS(SVG_NAMESPACE, 'circle');
         circle.dataset.id = String(node.index);
         circle.dataset.current = String(node.isCurrent);
-        circle.dataset.branchColor = COLORS[node.branchColorIndex % COLORS.length];
+        circle.dataset.branchColor = branchColor;
         circle.dataset.baseStrokeWidth = String(strokeWidth);
         circle.setAttribute('cx', String(node.x));
         circle.setAttribute('cy', String(node.y));
-        circle.setAttribute('r', node.isCurrent ? '5.5' : '4');
+        circle.setAttribute('r', node.isCurrent ? '5.5' : isMerge ? '4.8' : '4');
+        if (isMerge) {
+          circle.dataset.merge = 'true';
+        }
         if (node.isCurrent) {
-          circle.setAttribute('class', 'current');
+          circle.setAttribute('class', isMerge ? 'current merge' : 'current');
           circle.setAttribute('fill', 'var(--vscode-editor-background)');
-          circle.setAttribute('stroke', COLORS[node.branchColorIndex % COLORS.length]);
+          circle.setAttribute('stroke', branchColor);
           circle.setAttribute('stroke-width', String(strokeWidth));
+        } else if (isMerge) {
+          circle.setAttribute('class', 'merge');
+          circle.setAttribute('fill', 'var(--vscode-editor-background)');
+          circle.setAttribute('stroke', branchColor);
+          circle.setAttribute('stroke-width', String(Math.max(2.2, strokeWidth)));
         } else {
-          circle.setAttribute('fill', COLORS[node.branchColorIndex % COLORS.length]);
+          circle.setAttribute('fill', branchColor);
         }
         circle.addEventListener('click', (event) => {
           const multiSelect = event.ctrlKey || event.metaKey;
@@ -2067,12 +2271,21 @@ export class GitGraphPanel implements vscode.Disposable {
           });
         });
         svg.appendChild(circle);
+
+        if (isMerge) {
+          const innerDot = document.createElementNS(SVG_NAMESPACE, 'circle');
+          innerDot.setAttribute('class', 'mergeInner');
+          innerDot.setAttribute('cx', String(node.x));
+          innerDot.setAttribute('cy', String(node.y));
+          innerDot.setAttribute('r', node.isCurrent ? '1.8' : '1.6');
+          innerDot.setAttribute('fill', branchColor);
+          svg.appendChild(innerDot);
+        }
       }
 
       renderHiddenEdgeMarkers(model, layout, svg, strokeWidth);
 
       document.getElementById('commitGraph')?.appendChild(svg);
-      renderSelectionDecorations(model, layout);
       graphColumnElem.style.width = Math.max(96, width + 12) + 'px';
       wireFallbackInteractions(model, layout);
     }
@@ -2104,6 +2317,9 @@ export class GitGraphPanel implements vscode.Disposable {
 
     function renderCommitTable(model) {
       tableElem.replaceChildren();
+      tableElem.setAttribute('role', 'listbox');
+      tableElem.setAttribute('aria-label', 'Commit list');
+      tableElem.setAttribute('aria-multiselectable', 'true');
 
       const branchHeads = getBranchHeads(model);
       const orderedIndexes = getFallbackDisplayOrder(model);
@@ -2114,6 +2330,8 @@ export class GitGraphPanel implements vscode.Disposable {
         const row = document.createElement('div');
         row.className = 'commit';
         row.dataset.id = String(index);
+        row.tabIndex = -1;
+        row.setAttribute('role', 'option');
 
         const id = document.createElement('div');
         id.className = 'commit-id';
@@ -2130,12 +2348,44 @@ export class GitGraphPanel implements vscode.Disposable {
         row.appendChild(id);
         row.appendChild(branch);
 
+        const allCommitBranches = Array.isArray(commit.branches) ? commit.branches : [];
+        const extraBranches = allCommitBranches.filter((branchName) => branchName !== commit.branch);
+        const maxExtraBranches = 4;
+        for (const branchName of extraBranches.slice(0, maxExtraBranches)) {
+          const extraBranch = document.createElement('button');
+          extraBranch.type = 'button';
+          extraBranch.className = 'commit-branch commit-branch-extra';
+          extraBranch.textContent = branchName;
+          extraBranch.title = 'Add branch "' + branchName + '" to graph filter';
+          extraBranch.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            requestAddBranchToFilter(branchName);
+          });
+          row.appendChild(extraBranch);
+        }
+
+        if (extraBranches.length > maxExtraBranches) {
+          const more = document.createElement('div');
+          more.className = 'commit-branch';
+          more.textContent = '+' + String(extraBranches.length - maxExtraBranches);
+          more.title = String(extraBranches.length - maxExtraBranches) + ' additional branches contain this commit';
+          row.appendChild(more);
+        }
+
         const tags = Array.isArray(commit.tags) ? commit.tags : [];
         for (const tagName of tags) {
           const tag = document.createElement('div');
           tag.className = 'commit-tag';
           tag.textContent = tagName;
           row.appendChild(tag);
+        }
+
+        if (Array.isArray(commit.parents) && commit.parents.length > 1) {
+          const mergePill = document.createElement('div');
+          mergePill.className = 'commit-merge';
+          mergePill.textContent = 'merge';
+          row.appendChild(mergePill);
         }
 
         row.appendChild(message);
@@ -2161,6 +2411,7 @@ export class GitGraphPanel implements vscode.Disposable {
         row.addEventListener('click', (event) => {
           const multiSelect = event.ctrlKey || event.metaKey;
           setCommitSelection(model, index, multiSelect);
+          focusCommitRow(index, { preventReveal: true });
           vscode.postMessage({
             type: 'commit-click',
             commitId: commit.id,
@@ -2168,32 +2419,83 @@ export class GitGraphPanel implements vscode.Disposable {
           });
         });
 
+        row.addEventListener('focus', () => {
+          focusedCommitIndex = index;
+          syncCommitRowTabStops();
+        });
+
+        row.addEventListener('keydown', (event) => {
+          if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            if (event.ctrlKey || event.metaKey) {
+              expandSelectionAndMoveFocus(model, index, 1);
+            } else {
+              moveFocusOnly(model, index, 1);
+            }
+            return;
+          }
+
+          if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            if (event.ctrlKey || event.metaKey) {
+              expandSelectionAndMoveFocus(model, index, -1);
+            } else {
+              moveFocusOnly(model, index, -1);
+            }
+            return;
+          }
+
+          if (event.key === 'Home') {
+            event.preventDefault();
+            focusCommitBoundary(model, 'start');
+            return;
+          }
+
+          if (event.key === 'End') {
+            event.preventDefault();
+            focusCommitBoundary(model, 'end');
+            return;
+          }
+
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            if (event.ctrlKey || event.metaKey) {
+              setCommitSelection(model, index, true);
+              focusCommitRow(index, { preventReveal: true });
+            } else {
+              invokeCommit(model, index);
+            }
+            return;
+          }
+
+          if (event.key === ' ' || event.key === 'Spacebar') {
+            event.preventDefault();
+            setCommitSelection(model, index, event.ctrlKey || event.metaKey);
+            focusCommitRow(index, { preventReveal: true });
+            return;
+          }
+
+          if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+            event.preventDefault();
+            openCommitContextMenu(model, index, selectedCommitIndexes.size > 1);
+          }
+        });
+
         row.addEventListener('contextmenu', (event) => {
           event.preventDefault();
-          setCommitSelection(model, index, true);
-          vscode.postMessage({
-            type: 'commit-context-menu',
-            commitId: commit.id,
-            branch: commit.branch,
-            selectedCommitIds: getSelectedCommitIds(model)
-          });
+          openCommitContextMenu(model, index, true);
         });
 
         menuButton.addEventListener('click', (event) => {
           event.stopPropagation();
-          setCommitSelection(model, index, true);
-          vscode.postMessage({
-            type: 'commit-context-menu',
-            commitId: commit.id,
-            branch: commit.branch,
-            selectedCommitIds: getSelectedCommitIds(model)
-          });
+          openCommitContextMenu(model, index, true);
         });
 
         tableElem.appendChild(row);
       }
 
       applySelectionState();
+      syncCommitRowTabStops();
     }
 
     function wireVertexClicks(model) {

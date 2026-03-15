@@ -1,6 +1,7 @@
 export type GraphCommit = {
   id: string;
   branch: string;
+  branches?: string[];
   parents: string[];
   message?: string;
   tags?: string[];
