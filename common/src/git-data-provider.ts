@@ -135,8 +135,41 @@ export class LocalGitDataProvider implements GitDataProvider {
 
     const branchMembership = await buildBranchMembership(repoRoot, availableBranchNames, fileSpecs);
     const included = new Set(commitRows.map((row) => row.sha));
+    let defaultActiveBranchNames: string[] = [];
+    if (filter.branches.length === 0) {
+      try {
+        const currentBranchName = (await runGit(repoRoot, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+        if (currentBranchName && currentBranchName !== 'HEAD') {
+          defaultActiveBranchNames = [currentBranchName];
+        }
+      } catch {
+        defaultActiveBranchNames = [];
+      }
+    }
+    const activeBranches = new Set(filter.branches.length > 0 ? filter.branches : defaultActiveBranchNames);
 
     const commits = commitRows.map((row) => ({
+      hiddenMergeBranches: (() => {
+        if (row.parents.length < 2) {
+          return [];
+        }
+
+        const secondParentSha = row.parents[1];
+        const secondParentBranches = findBranchesForCommit(secondParentSha, availableBranchNames, branchMembership);
+        return secondParentBranches.filter((branchName) => !activeBranches.has(branchName));
+      })(),
+      hiddenMergeParentId: (() => {
+        if (row.parents.length < 2) {
+          return undefined;
+        }
+
+        const secondParentSha = row.parents[1];
+        if (included.has(secondParentSha)) {
+          return undefined;
+        }
+
+        return shortSha(secondParentSha);
+      })(),
       branches: findBranchesForCommit(row.sha, availableBranchNames, branchMembership),
       id: shortSha(row.sha),
       branch: findPreferredBranchForCommit(

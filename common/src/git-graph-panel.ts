@@ -530,6 +530,11 @@ export class GitGraphPanel implements vscode.Disposable {
       stroke-opacity: 0.75;
     }
 
+    #commitGraph circle.merge:not(.current) {
+      stroke: inherit;
+      stroke-opacity: 1;
+    }
+
     #commitGraph circle.stashInner {
       stroke-opacity: 1;
       pointer-events: none;
@@ -1111,6 +1116,41 @@ export class GitGraphPanel implements vscode.Disposable {
       const filter = collectHeaderFilter();
       const directionLabel = direction === 'parents' ? 'older' : 'newer';
       applyHeaderFilter(filter, 'Loading ' + directionLabel + ' commits: ');
+    }
+
+    function requestHiddenMergeBranchExpansion(branchName, commitId) {
+      const normalizedBranch = String(branchName || '').trim();
+      if (!normalizedBranch) {
+        return;
+      }
+
+      const branchesInput = document.getElementById('filterBranches');
+      if (branchesInput) {
+        const branches = parseCsvInput(branchesInput.value);
+        if (!branches.includes(normalizedBranch)) {
+          branches.push(normalizedBranch);
+          branchesInput.value = branches.join(',');
+        }
+      }
+
+      const rangeStartInput = document.getElementById('filterRangeStart');
+      const rangeEndInput = document.getElementById('filterRangeEnd');
+      const currentRange = joinCommitRange(
+        rangeStartInput ? rangeStartInput.value : '',
+        rangeEndInput ? rangeEndInput.value : ''
+      );
+      const nextRange = expandCommitRangeForDirection(currentRange, 'parents', commitId);
+      const split = splitCommitRange(nextRange);
+
+      if (rangeStartInput) {
+        rangeStartInput.value = split.start;
+      }
+      if (rangeEndInput) {
+        rangeEndInput.value = split.end;
+      }
+
+      const filter = collectHeaderFilter();
+      applyHeaderFilter(filter, 'Loading merge branch ' + normalizedBranch + ': ');
     }
 
     function getCurrentRangePartsFromHeader() {
@@ -2136,6 +2176,101 @@ export class GitGraphPanel implements vscode.Disposable {
       }
     }
 
+    function renderHiddenMergeBranchMarkers(model, layout, svg, strokeWidth) {
+      const lane = Math.max(20, Number(layout?.lane || 48));
+      const markerOffsetX = Math.max(18, lane * 0.45);
+      const sw = Math.max(1.5, Number(strokeWidth || 2.2));
+      const r = 6.1;
+      const halfPlus = r * 0.45;
+      const thinSw = sw * 0.5;
+
+      const entries = model.commits
+        .map((commit) => ({ commit, node: layout.commitsById.get(commit.id) }))
+        .filter((entry) => Boolean(entry.node));
+
+      entries.forEach((entry) => {
+        const hiddenBranches = Array.isArray(entry.commit.hiddenMergeBranches)
+          ? entry.commit.hiddenMergeBranches
+          : [];
+        const hasHiddenSecondParent = typeof entry.commit.hiddenMergeParentId === 'string'
+          && entry.commit.hiddenMergeParentId.length > 0;
+        if (hiddenBranches.length === 0 && !hasHiddenSecondParent) {
+          return;
+        }
+
+        const targetBranch = hiddenBranches[0];
+        const node = entry.node;
+        const markerX = node.x + markerOffsetX;
+        const markerY = node.y;
+        const color = COLORS[node.branchColorIndex % COLORS.length];
+
+        const line = document.createElementNS(SVG_NAMESPACE, 'path');
+        line.setAttribute('class', 'hidden-edge-connector');
+        line.setAttribute('d', 'M' + node.x + ',' + node.y + ' L' + markerX + ',' + markerY);
+        svg.appendChild(line);
+
+        const nodeCircle = document.createElementNS(SVG_NAMESPACE, 'circle');
+        nodeCircle.setAttribute('class', 'hidden-node-circle');
+        nodeCircle.setAttribute('cx', String(markerX));
+        nodeCircle.setAttribute('cy', String(markerY));
+        nodeCircle.setAttribute('r', String(r));
+        nodeCircle.style.stroke = color;
+        nodeCircle.style.strokeWidth = String(thinSw);
+        svg.appendChild(nodeCircle);
+
+        const plusPath = document.createElementNS(SVG_NAMESPACE, 'path');
+        plusPath.setAttribute('class', 'hidden-node-plus');
+        plusPath.setAttribute(
+          'd',
+          'M' + (markerX - halfPlus) + ',' + markerY
+          + ' H' + (markerX + halfPlus)
+          + ' M' + markerX + ',' + (markerY - halfPlus)
+          + ' V' + (markerY + halfPlus)
+        );
+        plusPath.style.stroke = color;
+        plusPath.style.strokeWidth = String(thinSw);
+        svg.appendChild(plusPath);
+
+        const hitTarget = document.createElementNS(SVG_NAMESPACE, 'circle');
+        hitTarget.setAttribute('class', 'hidden-node-hittarget');
+        hitTarget.setAttribute('cx', String(markerX));
+        hitTarget.setAttribute('cy', String(markerY));
+        hitTarget.setAttribute('r', String(r + 4));
+        hitTarget.setAttribute(
+          'title',
+          targetBranch
+            ? (
+              'Load merge source branch ' + targetBranch
+              + (hiddenBranches.length > 1 ? ' (+' + String(hiddenBranches.length - 1) + ' more)' : '')
+            )
+            : 'Load merged-in parent history'
+        );
+        hitTarget.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (hitTarget.classList.contains('loading')) {
+            return;
+          }
+
+          hitTarget.classList.add('loading');
+          nodeCircle.classList.add('loading');
+          plusPath.classList.add('loading');
+
+          setTimeout(() => {
+            hitTarget.classList.remove('loading');
+            nodeCircle.classList.remove('loading');
+            plusPath.classList.remove('loading');
+          }, 15000);
+
+          if (targetBranch) {
+            requestHiddenMergeBranchExpansion(targetBranch, entry.commit.id);
+          } else {
+            requestHiddenEdgeExpansion('parents', entry.commit.id);
+          }
+        });
+        svg.appendChild(hitTarget);
+      });
+    }
+
     function wireFallbackInteractions(model, layout) {
       const rows = getCommitElems();
       const circles = Array.from(document.querySelectorAll('#commitGraph circle[data-id]'));
@@ -2256,8 +2391,9 @@ export class GitGraphPanel implements vscode.Disposable {
         } else if (isMerge) {
           circle.setAttribute('class', 'merge');
           circle.setAttribute('fill', 'var(--vscode-editor-background)');
-          circle.setAttribute('stroke', branchColor);
-          circle.setAttribute('stroke-width', String(Math.max(2.2, strokeWidth)));
+          circle.style.stroke = branchColor;
+          circle.style.strokeWidth = String(Math.max(2.2, strokeWidth));
+          circle.style.strokeOpacity = '1';
         } else {
           circle.setAttribute('fill', branchColor);
         }
@@ -2284,6 +2420,7 @@ export class GitGraphPanel implements vscode.Disposable {
       }
 
       renderHiddenEdgeMarkers(model, layout, svg, strokeWidth);
+      renderHiddenMergeBranchMarkers(model, layout, svg, strokeWidth);
 
       document.getElementById('commitGraph')?.appendChild(svg);
       graphColumnElem.style.width = Math.max(96, width + 12) + 'px';
