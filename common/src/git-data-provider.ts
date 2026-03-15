@@ -105,6 +105,28 @@ export class LocalGitDataProvider implements GitDataProvider {
     const fileSpecs = normalizeFileSpecs(filter.files);
     const branchNames = filter.branches.length > 0 ? filter.branches : await listLocalBranches(repoRoot);
     const commitRows = await listLocalCommits(repoRoot, filter.commitRange, fileSpecs);
+    let tagsByCommitSha = new Map<string, string[]>();
+    try {
+      tagsByCommitSha = await listLocalTagsByCommitSha(repoRoot);
+    } catch {
+      tagsByCommitSha = new Map<string, string[]>();
+    }
+    let fullChildMap = new Map<string, string[]>();
+    try {
+      fullChildMap = await listLocalChildMap(repoRoot, filter.commitRange, fileSpecs);
+    } catch {
+      // Hidden-child indicators are best-effort. If this scan is too expensive,
+      // continue with parent links only instead of failing the entire slice load.
+      fullChildMap = new Map<string, string[]>();
+    }
+
+    let headSha: string | undefined;
+    try {
+      const raw = await runGit(repoRoot, ['rev-parse', 'HEAD']);
+      headSha = shortSha(raw.trim());
+    } catch {
+      // Empty repo or detached HEAD with no commits — skip.
+    }
 
     if (commitRows.length === 0) {
       throw new Error('No commits found for the selected local filter.');
@@ -119,11 +141,14 @@ export class LocalGitDataProvider implements GitDataProvider {
       parents: row.parents
         .filter((parentSha) => included.has(parentSha))
         .map((parentSha) => shortSha(parentSha)),
-      message: row.subject
+      message: row.subject,
+      tags: tagsByCommitSha.get(row.sha) ?? [],
+      hiddenParentCount: row.parents.filter((parentSha) => !included.has(parentSha)).length,
+      hiddenChildCount: (fullChildMap.get(row.sha) ?? []).filter((childSha) => !included.has(childSha)).length
     }));
 
     const branches = Array.from(new Set(commits.map((commit) => commit.branch)));
-    return { branches, commits };
+    return { branches, commits, head: headSha };
   }
 }
 
@@ -170,7 +195,9 @@ export class RemoteGitDataProvider implements GitDataProvider {
     const knownIds = new Set(commits.map((c) => c.id));
     const normalized = commits.map((c) => ({
       ...c,
-      parents: c.parents.filter((p) => knownIds.has(p))
+      parents: c.parents.filter((p) => knownIds.has(p)),
+      hiddenParentCount: c.parents.filter((p) => !knownIds.has(p)).length,
+      hiddenChildCount: 0
     }));
 
     if (normalized.length === 0) {
@@ -423,6 +450,74 @@ async function buildBranchMembership(
   return membership;
 }
 
+async function listLocalChildMap(
+  repoRoot: string,
+  commitRange: string | undefined,
+  fileSpecs: string[]
+): Promise<Map<string, string[]>> {
+  const range = (commitRange ?? '').trim();
+  const args = ['rev-list', '--children', '--max-count=2500'];
+
+  if (range.length > 0) {
+    args.push(range);
+  } else {
+    args.push('--all');
+  }
+
+  if (fileSpecs.length > 0) {
+    args.push('--', ...fileSpecs);
+  }
+
+  const output = await runGit(repoRoot, args);
+  const map = new Map<string, string[]>();
+
+  output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .forEach((line) => {
+      const [sha, ...children] = line.split(' ').filter((part) => part.length > 0);
+      if (!sha) {
+        return;
+      }
+
+      map.set(sha, children);
+    });
+
+  return map;
+}
+
+async function listLocalTagsByCommitSha(repoRoot: string): Promise<Map<string, string[]>> {
+  const output = await runGit(repoRoot, [
+    'for-each-ref',
+    '--format=%(refname:short)%09%(objectname)%09%(*objectname)',
+    'refs/tags'
+  ]);
+
+  const map = new Map<string, string[]>();
+  output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .forEach((line) => {
+      const [tagName = '', objectSha = '', peeledSha = ''] = line.split('\t');
+      const commitSha = (peeledSha || objectSha).trim();
+      if (!tagName || !commitSha) {
+        return;
+      }
+
+      const existing = map.get(commitSha) ?? [];
+      existing.push(tagName.trim());
+      map.set(commitSha, existing);
+    });
+
+  map.forEach((values, key) => {
+    map.set(key, values.sort((a, b) => a.localeCompare(b)));
+  });
+
+  return map;
+}
+
 function findBranchForCommit(
   sha: string,
   branchNames: string[],
@@ -439,7 +534,7 @@ function findBranchForCommit(
 
 async function runGit(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile('git', ['-C', cwd, ...args], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile('git', ['-C', cwd, ...args], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(stderr || error.message));
         return;
@@ -457,10 +552,25 @@ function filterModel(model: GraphModel, filter: GitGraphFilter): GraphModel {
   const branchSet = new Set(filter.branches);
   const commits = model.commits.filter((commit) => branchSet.has(commit.branch));
   const ids = new Set(commits.map((commit) => commit.id));
+  const removedCommits = model.commits.filter((commit) => !branchSet.has(commit.branch));
+  const removedChildCountByParentId = new Map<string, number>();
+
+  removedCommits.forEach((commit) => {
+    commit.parents.forEach((parentId) => {
+      if (!ids.has(parentId)) {
+        return;
+      }
+
+      removedChildCountByParentId.set(parentId, (removedChildCountByParentId.get(parentId) ?? 0) + 1);
+    });
+  });
 
   const normalizedCommits = commits.map((commit) => ({
     ...commit,
-    parents: commit.parents.filter((parentId) => ids.has(parentId))
+    parents: commit.parents.filter((parentId) => ids.has(parentId)),
+    hiddenParentCount: (commit.hiddenParentCount ?? 0)
+      + commit.parents.filter((parentId) => !ids.has(parentId)).length,
+    hiddenChildCount: (commit.hiddenChildCount ?? 0) + (removedChildCountByParentId.get(commit.id) ?? 0)
   }));
 
   if (normalizedCommits.length === 0) {
@@ -469,6 +579,7 @@ function filterModel(model: GraphModel, filter: GitGraphFilter): GraphModel {
 
   return {
     branches: Array.from(new Set(normalizedCommits.map((commit) => commit.branch))),
-    commits: normalizedCommits
+    commits: normalizedCommits,
+    head: model.head
   };
 }

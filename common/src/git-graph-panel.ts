@@ -18,6 +18,7 @@ export interface GitGraphPanelOptions {
   commitVerticalDistance?: number;
   strokeWidth?: number;
   onCommitClick?: (commitId: string, branch: string) => void;
+  onCommitContextMenu?: (commitId: string, branch: string, selectedCommitIds: string[]) => void;
   localDataProvider?: GitDataProvider;
   remoteDataProvider?: GitDataProvider;
   fallbackDataProvider?: GitDataProvider;
@@ -46,6 +47,94 @@ export class GitGraphPanel implements vscode.Disposable {
       : parsedModel;
 
     this.showModel(model);
+  }
+
+  showLoading(initialFilter?: GitGraphFilter): void {
+    const initialConfig = {
+      branchLaneDistance: this.options.branchLaneDistance ?? 120,
+      commitVerticalDistance: this.options.commitVerticalDistance ?? 46,
+      strokeWidth: this.options.strokeWidth ?? 2.2
+    };
+
+    const placeholder = createSampleGraphModel();
+
+    if (!this.panel) {
+      this.panel = vscode.window.createWebviewPanel(
+        this.options.panelId ?? 'gitGraphPanel',
+        this.options.title ?? 'Git Graph',
+        this.options.viewColumn ?? vscode.ViewColumn.Active,
+        {
+          enableScripts: true,
+          retainContextWhenHidden: true,
+          localResourceRoots: []
+        }
+      );
+
+      this.panel.webview.onDidReceiveMessage(async (message) => {
+        if (message?.type === 'apply-filter') {
+          const filter = this.parseFilterFromMessage(message);
+          const provider = this.resolveProvider(filter);
+
+          try {
+            const providedModel = await provider.getGraphSlice(filter);
+            const modelToRender = this.ensureRenderableModel(providedModel, placeholder);
+            void this.panel?.webview.postMessage({
+              type: 'set-graph',
+              model: modelToRender,
+              config: initialConfig
+            });
+          } catch (error) {
+            const details = error instanceof Error ? error.message : String(error);
+            void vscode.window.showErrorMessage(`Failed to load graph slice: ${details}`);
+            void this.panel?.webview.postMessage({ type: 'set-loading', loading: false });
+          }
+          return;
+        }
+
+        if (message?.type === 'commit-context-menu') {
+          if (typeof message.commitId !== 'string' || typeof message.branch !== 'string') {
+            return;
+          }
+
+          const selectedCommitIds = Array.isArray(message.selectedCommitIds)
+            ? message.selectedCommitIds.filter((id: unknown): id is string => typeof id === 'string')
+            : [message.commitId];
+          this.options.onCommitContextMenu?.(message.commitId, message.branch, selectedCommitIds);
+          return;
+        }
+
+        if (message?.type !== 'commit-click') {
+          return;
+        }
+
+        if (typeof message.commitId !== 'string' || typeof message.branch !== 'string') {
+          return;
+        }
+
+        this.options.onCommitClick?.(message.commitId, message.branch);
+      });
+      this.panel.onDidDispose(() => {
+        this.panel = undefined;
+      });
+    }
+
+    this.panel.webview.html = this.getHtml(
+      this.panel.webview,
+      placeholder,
+      initialConfig,
+      initialFilter?.uri,
+      true
+    );
+
+    this.panel.reveal(this.options.viewColumn ?? vscode.ViewColumn.Active);
+    void this.panel.webview.postMessage({ type: 'set-loading', loading: true });
+  }
+
+  hideLoading(): void {
+    if (!this.panel) {
+      return;
+    }
+    void this.panel.webview.postMessage({ type: 'set-loading', loading: false });
   }
 
   showModel(model: GraphModel, initialFilter?: GitGraphFilter): void {
@@ -96,11 +185,10 @@ export class GitGraphPanel implements vscode.Disposable {
             return;
           }
 
-          const selectedCount = Array.isArray(message.selectedCommitIds)
-            ? message.selectedCommitIds.filter((id: unknown): id is string => typeof id === 'string').length
-            : 0;
-          const suffix = selectedCount > 1 ? ` (${selectedCount} selected)` : '';
-          void vscode.window.showInformationMessage(`Commit context menu placeholder: ${message.commitId}${suffix}`);
+          const selectedCommitIds = Array.isArray(message.selectedCommitIds)
+            ? message.selectedCommitIds.filter((id: unknown): id is string => typeof id === 'string')
+            : [message.commitId];
+          this.options.onCommitContextMenu?.(message.commitId, message.branch, selectedCommitIds);
           return;
         }
 
@@ -196,11 +284,13 @@ export class GitGraphPanel implements vscode.Disposable {
     webview: vscode.Webview,
     initialModel: GraphModel,
     initialConfig: { branchLaneDistance: number; commitVerticalDistance: number; strokeWidth: number },
-    initialFilterUri?: string
+    initialFilterUri?: string,
+    initialLoading = false
   ): string {
     const nonce = createNonce();
     const initialPayload = JSON.stringify({ model: initialModel, config: initialConfig }).replace(/</g, '\\u003c');
     const initialFilterUriJson = JSON.stringify(initialFilterUri ?? '').replace(/</g, '\\u003c');
+    const initialLoadingJson = initialLoading ? 'true' : 'false';
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -212,29 +302,69 @@ export class GitGraphPanel implements vscode.Disposable {
   />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
+    html,
+    body {
+      height: 100%;
+    }
+
     body {
       margin: 0;
       padding: 0;
       font-family: var(--vscode-font-family);
       color: var(--vscode-foreground);
       background: var(--vscode-editor-background);
+      overflow: hidden;
     }
 
     .panel {
       border: 1px solid var(--vscode-editorWidget-border);
       border-radius: 8px;
       overflow: hidden;
-      min-height: 240px;
       margin: 12px;
+      height: calc(100vh - 24px);
+      min-height: 240px;
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
     }
 
     #view {
       position: relative;
       display: flex;
-      height: min(64vh, 700px);
+      flex: 1;
       min-height: 260px;
       overflow: auto;
       background: var(--vscode-editor-background);
+    }
+
+    #graphLoading {
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 8;
+      background: color-mix(in srgb, var(--vscode-editor-background) 86%, transparent);
+      pointer-events: none;
+    }
+
+    #graphLoading.visible {
+      display: flex;
+    }
+
+    #graphLoading svg {
+      width: 28px;
+      height: 28px;
+    }
+
+    #graphLoading circle {
+      fill: var(--vscode-editor-background);
+      stroke: color-mix(in srgb, var(--vscode-focusBorder) 75%, var(--vscode-foreground));
+      stroke-width: 1.1;
+      stroke-dasharray: 3 2;
+      animation: hidden-node-spin 0.85s linear infinite;
+      transform-origin: center;
+      transform-box: fill-box;
     }
 
     #graphHeader {
@@ -321,6 +451,27 @@ export class GitGraphPanel implements vscode.Disposable {
       align-items: center;
     }
 
+    .header-range {
+      min-width: 240px;
+    }
+
+    .header-range-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .header-range-row input {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .header-range-sep {
+      opacity: 0.75;
+      font-size: 12px;
+      user-select: none;
+    }
+
     #applyFilter {
       border-color: var(--vscode-button-border, transparent);
       background: var(--vscode-button-background);
@@ -387,10 +538,64 @@ export class GitGraphPanel implements vscode.Disposable {
       stroke-width: 2;
     }
 
+    #commitGraph .hidden-edge-connector {
+      fill: none;
+      stroke: color-mix(in srgb, var(--vscode-descriptionForeground) 78%, transparent);
+      stroke-width: 1.4;
+      stroke-dasharray: 3 2;
+      pointer-events: none;
+    }
+
+    #commitGraph .hidden-node-circle {
+      fill: var(--vscode-editor-background);
+      stroke-dasharray: 2.5 2.5;
+      stroke-linecap: round;
+      pointer-events: none;
+    }
+
+    #commitGraph .hidden-node-circle.loading {
+      stroke-dasharray: 7 3;
+      animation: hidden-node-spin 0.85s linear infinite;
+      transform-origin: center;
+      transform-box: fill-box;
+    }
+
+    #commitGraph .hidden-node-plus {
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      pointer-events: none;
+    }
+
+    #commitGraph .hidden-node-plus.loading {
+      opacity: 0;
+    }
+
+    #commitGraph .hidden-node-hittarget {
+      fill: transparent;
+      stroke: none;
+      cursor: pointer;
+    }
+
+    #commitGraph .hidden-node-hittarget.loading {
+      pointer-events: none;
+      cursor: progress;
+    }
+
+    @keyframes hidden-node-spin {
+      from {
+        transform: rotate(0deg);
+      }
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
     #graphTooltip {
       display: block;
       position: absolute;
       pointer-events: none;
+      z-index: 7;
     }
 
     #graphTooltipPointer {
@@ -523,6 +728,20 @@ export class GitGraphPanel implements vscode.Disposable {
       line-height: 16px;
     }
 
+    .commit-tag {
+      font-size: 10px;
+      line-height: 14px;
+      padding: 0 6px;
+      border-radius: 10px;
+      border: 1px solid color-mix(in srgb, var(--vscode-charts-orange) 55%, var(--vscode-editorWidget-border));
+      background: color-mix(in srgb, var(--vscode-charts-orange) 18%, transparent);
+      color: color-mix(in srgb, var(--vscode-charts-orange) 88%, var(--vscode-foreground));
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     .commit-message {
       flex: 1;
       min-width: 0;
@@ -583,6 +802,11 @@ export class GitGraphPanel implements vscode.Disposable {
     <div id="view">
       <div id="graphColumn"><div id="commitGraph"></div></div>
       <div id="commitTable"></div>
+      <div id="graphLoading" aria-live="polite" aria-label="Loading graph">
+        <svg viewBox="0 0 20 20" role="img" aria-hidden="true">
+          <circle cx="10" cy="10" r="5.5"></circle>
+        </svg>
+      </div>
     </div>
   </div>
   <script nonce="${nonce}">
@@ -591,8 +815,10 @@ export class GitGraphPanel implements vscode.Disposable {
     const viewElem = document.getElementById('view');
     const tableElem = document.getElementById('commitTable');
     const graphColumnElem = document.getElementById('graphColumn');
+    const loadingElem = document.getElementById('graphLoading');
     const initialPayload = ${initialPayload};
     const initialFilterUri = ${initialFilterUriJson};
+    const initialLoading = ${initialLoadingJson};
     const COLORS = ['#1a73e8', '#34a853', '#ea4335', '#fbbc05', '#3f51b5', '#009688', '#ef6c00', '#8e24aa', '#4e6cef', '#5e9b45'];
     const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
     const UNCOMMITTED = '*';
@@ -600,6 +826,13 @@ export class GitGraphPanel implements vscode.Disposable {
     let currentConfig = null;
     let currentFallbackLayout = null;
     let alignRafHandle = 0;
+
+    function setLoadingVisible(visible) {
+      if (!loadingElem) {
+        return;
+      }
+      loadingElem.classList.toggle('visible', Boolean(visible));
+    }
 
     const GG = {
       GraphStyle: {
@@ -662,6 +895,38 @@ export class GitGraphPanel implements vscode.Disposable {
       };
     }
 
+    function splitCommitRange(value) {
+      const text = String(value || '').trim();
+      if (!text) {
+        return { start: '', end: '' };
+      }
+
+      const marker = text.indexOf('..');
+      if (marker < 0) {
+        return { start: text, end: '' };
+      }
+
+      return {
+        start: text.slice(0, marker).trim(),
+        end: text.slice(marker + 2).trim()
+      };
+    }
+
+    function joinCommitRange(start, end) {
+      const left = String(start || '').trim();
+      const right = String(end || '').trim();
+      if (!left && !right) {
+        return '';
+      }
+      if (!left) {
+        return right;
+      }
+      if (!right) {
+        return left;
+      }
+      return left + '..' + right;
+    }
+
     function buildUriFromHeaderState(state) {
       const source = state.source === 'remote' ? 'remote' : state.source === 'sample' ? 'sample' : 'local';
       const target = source === 'remote'
@@ -694,6 +959,112 @@ export class GitGraphPanel implements vscode.Disposable {
       }
     }
 
+    function applyHeaderFilter(filter, statusPrefix) {
+      const prefix = String(statusPrefix || 'Applying: ');
+      setHeaderStatus(prefix + filter.uri);
+      const collapsedStatus = document.getElementById('headerCollapsedStatus');
+      if (collapsedStatus) {
+        collapsedStatus.textContent = filter.uri;
+      }
+
+      vscode.postMessage({
+        type: 'apply-filter',
+        uri: filter.uri,
+        source: filter.source,
+        localPath: filter.localPath,
+        remoteUrl: filter.remoteUrl,
+        branches: filter.branches,
+        files: filter.files,
+        commitRange: filter.commitRange
+      });
+    }
+
+    function increaseTildeDepth(ref, increment, fallbackBase) {
+      const text = String(ref || '').trim();
+      const delta = Math.max(1, Number(increment || 1));
+
+      if (!text) {
+        return String(fallbackBase || 'HEAD') + '~' + String(delta);
+      }
+
+      const tokens = text.split('~').map((token) => token.trim()).filter((token) => token.length > 0);
+      if (tokens.length === 0) {
+        return String(fallbackBase || 'HEAD') + '~' + String(delta);
+      }
+
+      let base = tokens[0];
+      let depth = 0;
+      for (let index = 1; index < tokens.length; index += 1) {
+        const part = Number(tokens[index]);
+        if (!Number.isFinite(part)) {
+          base += '~' + tokens[index];
+          continue;
+        }
+
+        depth += Math.max(0, Math.floor(part));
+      }
+
+      return base + '~' + String(depth + delta);
+    }
+
+    function expandCommitRangeForDirection(currentRange, direction, commitId) {
+      const parts = splitCommitRange(currentRange);
+
+      if (direction === 'parents') {
+        if (!parts.start && !parts.end) {
+          return joinCommitRange(increaseTildeDepth(commitId, 40, commitId), commitId);
+        }
+
+        if (!parts.start && parts.end) {
+          return joinCommitRange(increaseTildeDepth(parts.end, 40, commitId), parts.end);
+        }
+
+        return joinCommitRange(increaseTildeDepth(parts.start, 40, commitId), parts.end);
+      }
+
+      if (!parts.start && !parts.end) {
+        return joinCommitRange(increaseTildeDepth(commitId, 80, commitId), 'HEAD');
+      }
+
+      if (parts.start && !parts.end) {
+        return joinCommitRange(parts.start, 'HEAD');
+      }
+
+      return joinCommitRange(parts.start, 'HEAD');
+    }
+
+    function requestHiddenEdgeExpansion(direction, commitId) {
+      const rangeStartInput = document.getElementById('filterRangeStart');
+      const rangeEndInput = document.getElementById('filterRangeEnd');
+      const currentRange = joinCommitRange(
+        rangeStartInput ? rangeStartInput.value : '',
+        rangeEndInput ? rangeEndInput.value : ''
+      );
+      const nextRange = expandCommitRangeForDirection(currentRange, direction, commitId);
+      const split = splitCommitRange(nextRange);
+
+      if (rangeStartInput) {
+        rangeStartInput.value = split.start;
+      }
+      if (rangeEndInput) {
+        rangeEndInput.value = split.end;
+      }
+
+      const filter = collectHeaderFilter();
+      const directionLabel = direction === 'parents' ? 'older' : 'newer';
+      applyHeaderFilter(filter, 'Loading ' + directionLabel + ' commits: ');
+    }
+
+    function getCurrentRangePartsFromHeader() {
+      const rangeStartInput = document.getElementById('filterRangeStart');
+      const rangeEndInput = document.getElementById('filterRangeEnd');
+      const range = joinCommitRange(
+        rangeStartInput ? rangeStartInput.value : '',
+        rangeEndInput ? rangeEndInput.value : ''
+      );
+      return splitCommitRange(range);
+    }
+
     function collectHeaderFilter() {
       const uriInput = document.getElementById('filterUri');
       const sourceSelect = document.getElementById('filterSource');
@@ -701,7 +1072,8 @@ export class GitGraphPanel implements vscode.Disposable {
       const remoteInput = document.getElementById('filterRemoteUrl');
       const branchesInput = document.getElementById('filterBranches');
       const filesInput = document.getElementById('filterFiles');
-      const rangeInput = document.getElementById('filterRange');
+      const rangeStartInput = document.getElementById('filterRangeStart');
+      const rangeEndInput = document.getElementById('filterRangeEnd');
 
       const rawSource = sourceSelect ? sourceSelect.value : 'sample';
       const source = rawSource === 'remote' ? 'remote' : rawSource === 'sample' ? 'sample' : 'local';
@@ -711,7 +1083,10 @@ export class GitGraphPanel implements vscode.Disposable {
         remoteUrl: remoteInput ? remoteInput.value : '',
         branches: branchesInput ? branchesInput.value : '',
         files: filesInput ? filesInput.value : '',
-        commitRange: rangeInput ? rangeInput.value : ''
+        commitRange: joinCommitRange(
+          rangeStartInput ? rangeStartInput.value : '',
+          rangeEndInput ? rangeEndInput.value : ''
+        )
       };
       const computedUri = buildUriFromHeaderState(draft);
       if (uriInput) {
@@ -777,9 +1152,13 @@ export class GitGraphPanel implements vscode.Disposable {
         + '      <label>Files</label>'
         + '      <input id="filterFiles" type="text" placeholder="src/app.ts" />'
         + '    </div>'
-        + '    <div class="header-field">'
+        + '    <div class="header-field header-range">'
         + '      <label>Commit Range</label>'
-        + '      <input id="filterRange" type="text" placeholder="HEAD~20..HEAD" />'
+        + '      <div class="header-range-row">'
+        + '        <input id="filterRangeStart" type="text" placeholder="HEAD~20" />'
+        + '        <span class="header-range-sep">..</span>'
+        + '        <input id="filterRangeEnd" type="text" placeholder="HEAD" />'
+        + '      </div>'
         + '    </div>'
         + '    <div class="header-actions">'
         + '      <button id="applyFilter" type="button">Apply</button>'
@@ -794,7 +1173,8 @@ export class GitGraphPanel implements vscode.Disposable {
       const remoteInput = document.getElementById('filterRemoteUrl');
       const branchesInput = document.getElementById('filterBranches');
       const filesInput = document.getElementById('filterFiles');
-      const rangeInput = document.getElementById('filterRange');
+      const rangeStartInput = document.getElementById('filterRangeStart');
+      const rangeEndInput = document.getElementById('filterRangeEnd');
       const applyButton = document.getElementById('applyFilter');
       const expandedPanel = document.getElementById('headerExpanded');
       const toggleBtn = document.getElementById('headerToggle');
@@ -816,7 +1196,10 @@ export class GitGraphPanel implements vscode.Disposable {
           remoteUrl: remoteInput ? remoteInput.value : '',
           branches: branchesInput ? branchesInput.value : '',
           files: filesInput ? filesInput.value : '',
-          commitRange: rangeInput ? rangeInput.value : ''
+          commitRange: joinCommitRange(
+            rangeStartInput ? rangeStartInput.value : '',
+            rangeEndInput ? rangeEndInput.value : ''
+          )
         };
         if (uriInput) {
           uriInput.value = buildUriFromHeaderState(state);
@@ -844,8 +1227,12 @@ export class GitGraphPanel implements vscode.Disposable {
         if (filesInput) {
           filesInput.value = state.files.join(',');
         }
-        if (rangeInput) {
-          rangeInput.value = state.commitRange;
+        const range = splitCommitRange(state.commitRange);
+        if (rangeStartInput) {
+          rangeStartInput.value = range.start;
+        }
+        if (rangeEndInput) {
+          rangeEndInput.value = range.end;
         }
         updateSourceVisibility();
       };
@@ -873,8 +1260,11 @@ export class GitGraphPanel implements vscode.Disposable {
       if (filesInput) {
         filesInput.addEventListener('input', updateUriFromFields);
       }
-      if (rangeInput) {
-        rangeInput.addEventListener('input', updateUriFromFields);
+      if (rangeStartInput) {
+        rangeStartInput.addEventListener('input', updateUriFromFields);
+      }
+      if (rangeEndInput) {
+        rangeEndInput.addEventListener('input', updateUriFromFields);
       }
       if (uriInput) {
         uriInput.addEventListener('change', updateFieldsFromUri);
@@ -883,18 +1273,7 @@ export class GitGraphPanel implements vscode.Disposable {
       if (applyButton) {
         applyButton.addEventListener('click', () => {
           const filter = collectHeaderFilter();
-          setHeaderStatus('Applying: ' + filter.uri);
-          if (collapsedStatus) collapsedStatus.textContent = filter.uri;
-          vscode.postMessage({
-            type: 'apply-filter',
-            uri: filter.uri,
-            source: filter.source,
-            localPath: filter.localPath,
-            remoteUrl: filter.remoteUrl,
-            branches: filter.branches,
-            files: filter.files,
-            commitRange: filter.commitRange
-          });
+          applyHeaderFilter(filter, 'Applying: ');
         });
       }
 
@@ -999,6 +1378,13 @@ export class GitGraphPanel implements vscode.Disposable {
     }
 
     function getFallbackCurrentHeadId(model) {
+      if (model.head) {
+        const match = model.commits.find((c) => c.id === model.head);
+        if (match) {
+          return match.id;
+        }
+      }
+
       const branchHeads = getBranchHeads(model);
       if (branchHeads.has('main')) {
         return branchHeads.get('main');
@@ -1130,14 +1516,15 @@ export class GitGraphPanel implements vscode.Disposable {
       anchor.appendChild(shadow);
       anchor.appendChild(pointer);
       anchor.appendChild(content);
-      graphColumnElem.appendChild(anchor);
+      viewElem.appendChild(anchor);
       fallbackTooltip = anchor;
 
-      const columnRect = graphColumnElem.getBoundingClientRect();
-      const top = Math.max(4, Math.min(node.y - 28, graphColumnElem.clientHeight - 72));
-      anchor.style.left = node.x + 'px';
+      const viewWidth = Math.max(240, viewElem.clientWidth);
+      const top = Math.max(4, Math.min(node.y - 28, viewElem.clientHeight - 72));
+      const left = graphColumnElem.offsetLeft + node.x;
+      anchor.style.left = left + 'px';
       anchor.style.top = top + 'px';
-      content.style.maxWidth = Math.min(columnRect.width - node.x - 35, 360) + 'px';
+      content.style.maxWidth = Math.max(180, Math.min(viewWidth - left - 35, 520)) + 'px';
 
       const tooltipRect = content.getBoundingClientRect();
       shadow.style.width = tooltipRect.width + 'px';
@@ -1443,6 +1830,119 @@ export class GitGraphPanel implements vscode.Disposable {
         + ' ' + child.x + ',' + child.y;
     }
 
+    function renderHiddenEdgeMarkers(model, layout, svg, strokeWidth) {
+      const markerOffset = Math.max(14, Number(layout?.stepY || 44) * 0.38);
+      const minY = 10;
+      const maxY = Math.max(minY + 4, Number(layout?.height || 180) - 10);
+
+      const appendMarker = (commit, node, direction, hiddenCount) => {
+        if (!hiddenCount || hiddenCount < 1) {
+          return;
+        }
+
+        const isParentDirection = direction === 'parents';
+        const markerY = isParentDirection
+          ? Math.min(maxY, node.y + markerOffset)
+          : Math.max(minY, node.y - markerOffset);
+        const color = COLORS[node.branchColorIndex % COLORS.length];
+        const sw = Math.max(1.5, Number(strokeWidth || 2.2));
+
+        const line = document.createElementNS(SVG_NAMESPACE, 'path');
+        line.setAttribute('class', 'hidden-edge-connector');
+        line.setAttribute('d', 'M' + node.x + ',' + node.y + ' L' + node.x + ',' + markerY);
+        svg.appendChild(line);
+
+        const r = 6.1;   // 5.5 * 1.1 — 10% bigger than HEAD circle
+        const halfPlus = r * 0.45;
+        const thinSw = sw * 0.5;
+
+        // Circle styled exactly like a HEAD commit node but dashed and thinner stroke.
+        const nodeCircle = document.createElementNS(SVG_NAMESPACE, 'circle');
+        nodeCircle.setAttribute('class', 'hidden-node-circle');
+        nodeCircle.setAttribute('cx', String(node.x));
+        nodeCircle.setAttribute('cy', String(markerY));
+        nodeCircle.setAttribute('r', String(r));
+        nodeCircle.style.stroke = color;
+        nodeCircle.style.strokeWidth = String(thinSw);
+        svg.appendChild(nodeCircle);
+
+        // + drawn as two SVG path segments so it is always pixel-perfect centered.
+        const plusPath = document.createElementNS(SVG_NAMESPACE, 'path');
+        plusPath.setAttribute('class', 'hidden-node-plus');
+        plusPath.setAttribute(
+          'd',
+          'M' + (node.x - halfPlus) + ',' + markerY
+          + ' H' + (node.x + halfPlus)
+          + ' M' + node.x + ',' + (markerY - halfPlus)
+          + ' V' + (markerY + halfPlus)
+        );
+        plusPath.style.stroke = color;
+        plusPath.style.strokeWidth = String(thinSw);
+        svg.appendChild(plusPath);
+
+        // Transparent larger hit-target for easier clicking.
+        const hitTarget = document.createElementNS(SVG_NAMESPACE, 'circle');
+        hitTarget.setAttribute('class', 'hidden-node-hittarget');
+        hitTarget.setAttribute('cx', String(node.x));
+        hitTarget.setAttribute('cy', String(markerY));
+        hitTarget.setAttribute('r', String(r + 4));
+        hitTarget.setAttribute(
+          'title',
+          (isParentDirection ? 'Load older commits' : 'Load newer commits') + ' (+' + String(hiddenCount) + ')'
+        );
+        hitTarget.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (hitTarget.classList.contains('loading')) {
+            return;
+          }
+
+          hitTarget.classList.add('loading');
+          nodeCircle.classList.add('loading');
+          plusPath.classList.add('loading');
+
+          // If refresh never returns, restore marker state to avoid a stuck spinner.
+          setTimeout(() => {
+            hitTarget.classList.remove('loading');
+            nodeCircle.classList.remove('loading');
+            plusPath.classList.remove('loading');
+          }, 15000);
+
+          requestHiddenEdgeExpansion(direction, commit.id);
+        });
+        svg.appendChild(hitTarget);
+      };
+
+      const entries = model.commits
+        .map((commit) => ({ commit, node: layout.commitsById.get(commit.id) }))
+        .filter((entry) => Boolean(entry.node));
+      if (entries.length === 0) {
+        return;
+      }
+
+      const topEntry = entries.reduce((best, current) => (current.node.y < best.node.y ? current : best), entries[0]);
+      const bottomEntry = entries.reduce((best, current) => (current.node.y > best.node.y ? current : best), entries[0]);
+
+      const totalHiddenParents = entries
+        .reduce((sum, entry) => sum + Number(entry.commit.hiddenParentCount || 0), 0);
+      const totalHiddenChildren = entries
+        .reduce((sum, entry) => sum + Number(entry.commit.hiddenChildCount || 0), 0);
+
+      const rangeParts = getCurrentRangePartsFromHeader();
+      const hasBoundedStart = rangeParts.start.length > 0;
+      const hasBoundedEnd = rangeParts.end.length > 0 && rangeParts.end.toUpperCase() !== 'HEAD';
+
+      const showParentsMarker = totalHiddenParents > 0 || hasBoundedStart;
+      const showChildrenMarker = totalHiddenChildren > 0 || hasBoundedEnd;
+
+      if (showParentsMarker) {
+        appendMarker(bottomEntry.commit, bottomEntry.node, 'parents', Math.max(1, totalHiddenParents));
+      }
+
+      if (showChildrenMarker) {
+        appendMarker(topEntry.commit, topEntry.node, 'children', Math.max(1, totalHiddenChildren));
+      }
+    }
+
     function wireFallbackInteractions(model, layout) {
       const rows = getCommitElems();
       const circles = Array.from(document.querySelectorAll('#commitGraph circle[data-id]'));
@@ -1569,6 +2069,8 @@ export class GitGraphPanel implements vscode.Disposable {
         svg.appendChild(circle);
       }
 
+      renderHiddenEdgeMarkers(model, layout, svg, strokeWidth);
+
       document.getElementById('commitGraph')?.appendChild(svg);
       renderSelectionDecorations(model, layout);
       graphColumnElem.style.width = Math.max(96, width + 12) + 'px';
@@ -1627,6 +2129,15 @@ export class GitGraphPanel implements vscode.Disposable {
 
         row.appendChild(id);
         row.appendChild(branch);
+
+        const tags = Array.isArray(commit.tags) ? commit.tags : [];
+        for (const tagName of tags) {
+          const tag = document.createElement('div');
+          tag.className = 'commit-tag';
+          tag.textContent = tagName;
+          row.appendChild(tag);
+        }
+
         row.appendChild(message);
 
         branchHeads.forEach((headId, branchName) => {
@@ -1748,8 +2259,14 @@ export class GitGraphPanel implements vscode.Disposable {
     }
 
     window.addEventListener('message', (event) => {
+      if (event.data?.type === 'set-loading') {
+        setLoadingVisible(event.data.loading !== false);
+        return;
+      }
+
       if (event.data?.type === 'set-graph') {
         try {
+          setLoadingVisible(false);
           draw(event.data.model, event.data.config);
           const branchCount = Array.isArray(event.data.model?.branches) ? event.data.model.branches.length : 0;
           const commitCount = Array.isArray(event.data.model?.commits) ? event.data.model.commits.length : 0;
@@ -1763,12 +2280,16 @@ export class GitGraphPanel implements vscode.Disposable {
 
     renderHeader();
 
-    try {
-      draw(initialPayload.model, initialPayload.config);
-      scheduleGraphRealign();
-    } catch (error) {
-      const details = error instanceof Error ? error.message : String(error);
-      showError('Unable to render initial graph.\\n\\n' + details);
+    if (initialLoading) {
+      setLoadingVisible(true);
+    } else {
+      try {
+        draw(initialPayload.model, initialPayload.config);
+        scheduleGraphRealign();
+      } catch (error) {
+        const details = error instanceof Error ? error.message : String(error);
+        showError('Unable to render initial graph.\\n\\n' + details);
+      }
     }
   </script>
 </body>
