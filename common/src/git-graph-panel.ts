@@ -1153,6 +1153,56 @@ export class GitGraphPanel implements vscode.Disposable {
       applyHeaderFilter(filter, 'Loading merge branch ' + normalizedBranch + ': ');
     }
 
+    function requestMergeParentExpansion(mergeParentId, branchName) {
+      const mergeParent = String(mergeParentId || '').trim();
+      if (!mergeParent) {
+        return;
+      }
+
+      const normalizedBranch = String(branchName || '').trim();
+      const branchesInput = document.getElementById('filterBranches');
+      if (branchesInput) {
+        const branches = parseCsvInput(branchesInput.value)
+          .filter((name) => !String(name).startsWith('merge-parent/'));
+        if (normalizedBranch) {
+          if (!branches.includes(normalizedBranch)) {
+            branches.push(normalizedBranch);
+          }
+        }
+        branchesInput.value = branches.join(',');
+      }
+
+      const rangeStartInput = document.getElementById('filterRangeStart');
+      const rangeEndInput = document.getElementById('filterRangeEnd');
+      const currentRange = joinCommitRange(
+        rangeStartInput ? rangeStartInput.value : '',
+        rangeEndInput ? rangeEndInput.value : ''
+      );
+      const parts = splitCommitRange(currentRange);
+      const currentStart = String(parts.start || '').trim();
+      const currentBase = currentStart.split('~')[0].trim();
+
+      const nextStart = currentBase === mergeParent
+        ? increaseTildeDepth(currentStart, 40, mergeParent)
+        : increaseTildeDepth(mergeParent, 40, mergeParent);
+      const nextEnd = parts.end || 'HEAD';
+
+      if (rangeStartInput) {
+        rangeStartInput.value = nextStart;
+      }
+      if (rangeEndInput) {
+        rangeEndInput.value = nextEnd;
+      }
+
+      const filter = collectHeaderFilter();
+      applyHeaderFilter(
+        filter,
+        normalizedBranch
+          ? 'Loading merge parent and branch ' + normalizedBranch + ': '
+          : 'Loading merge parent lineage: '
+      );
+    }
+
     function getCurrentRangePartsFromHeader() {
       const rangeStartInput = document.getElementById('filterRangeStart');
       const rangeEndInput = document.getElementById('filterRangeEnd');
@@ -1598,6 +1648,38 @@ export class GitGraphPanel implements vscode.Disposable {
       const heads = headNames.length > 0
         ? headNames.map((name) => '<span class="graphTooltipRef">' + escapeHtml(name) + '</span>').join('')
         : '';
+      const commitType = commit.parents.length > 1
+        ? 'merge'
+        : commit.parents.length === 0
+          ? 'root'
+          : 'commit';
+      const commitBranches = Array.from(new Set(
+        [commit.branch].concat(Array.isArray(commit.branches) ? commit.branches : [])
+      ));
+      const branchesInfo = commitBranches
+        .map((name) => '<span class="graphTooltipRef">' + escapeHtml(name) + '</span>')
+        .join('');
+      const secondParentBranches = Array.isArray(commit.secondParentBranches)
+        ? commit.secondParentBranches
+        : [];
+      const secondParentDetails = commitType !== 'merge'
+        ? ''
+        : (() => {
+            const secondParentId = String(commit.secondParentId || '').trim();
+            if (!secondParentId) {
+              return '<div class="graphTooltipSection">Second parent: <span class="graphTooltipRef">unknown</span></div>';
+            }
+
+            const kind = commit.secondParentKind === 'branch' ? 'branch-backed' : 'detached';
+            const branchRefs = secondParentBranches.length > 0
+              ? secondParentBranches.map((name) => '<span class="graphTooltipRef">' + escapeHtml(name) + '</span>').join('')
+              : '<span class="graphTooltipRef">none</span>';
+            return '<div class="graphTooltipSection">Second parent: '
+              + '<span class="graphTooltipRef">' + escapeHtml(secondParentId) + '</span>'
+              + '<span class="graphTooltipCombinedRef">' + escapeHtml(kind) + '</span>'
+              + '</div>'
+              + '<div class="graphTooltipSection">Likely source branches: ' + branchRefs + '</div>';
+          })();
 
       anchor.setAttribute('id', 'graphTooltip');
       pointer.setAttribute('id', 'graphTooltipPointer');
@@ -1606,9 +1688,12 @@ export class GitGraphPanel implements vscode.Disposable {
       content.style.borderColor = color;
       content.innerHTML = [
         '<div class="graphTooltipTitle">Commit ' + escapeHtml(abbrevCommit(commit.id)) + '</div>',
+        '<div class="graphTooltipSection">Type: <span class="graphTooltipRef">' + escapeHtml(commitType) + '</span></div>',
         '<div class="graphTooltipSection">Branch: <span class="graphTooltipRef">' + escapeHtml(commit.branch) + '</span></div>',
+        branchesInfo ? '<div class="graphTooltipSection">Branches: ' + branchesInfo + '</div>' : '',
         headNames.length > 0 ? '<div class="graphTooltipSection">Heads: ' + heads + '</div>' : '',
-        '<div class="graphTooltipSection">Parents: ' + parents + '</div>'
+        '<div class="graphTooltipSection">Parents: ' + parents + '</div>',
+        secondParentDetails
       ].filter(Boolean).join('');
       shadow.setAttribute('id', 'graphTooltipShadow');
 
@@ -1619,13 +1704,18 @@ export class GitGraphPanel implements vscode.Disposable {
       fallbackTooltip = anchor;
 
       const viewWidth = Math.max(240, viewElem.clientWidth);
-      const top = Math.max(4, Math.min(node.y - 28, viewElem.clientHeight - 72));
+      const scrollTop = Number(viewElem.scrollTop || 0);
+      const minTop = scrollTop + 4;
+      const maxTop = scrollTop + Math.max(32, viewElem.clientHeight - 72);
+      const top = Math.max(minTop, Math.min(node.y - 28, maxTop));
       const left = graphColumnElem.offsetLeft + node.x;
       anchor.style.left = left + 'px';
       anchor.style.top = top + 'px';
       content.style.maxWidth = Math.max(180, Math.min(viewWidth - left - 35, 520)) + 'px';
 
       const tooltipRect = content.getBoundingClientRect();
+      const pointerTop = Math.max(6, Math.min(node.y - top, tooltipRect.height - 6));
+      pointer.style.top = pointerTop + 'px';
       shadow.style.width = tooltipRect.width + 'px';
       shadow.style.height = tooltipRect.height + 'px';
     }
@@ -2183,6 +2273,7 @@ export class GitGraphPanel implements vscode.Disposable {
       const r = 6.1;
       const halfPlus = r * 0.45;
       const thinSw = sw * 0.5;
+      const commitsById = new Map(model.commits.map((commit) => [commit.id, commit]));
 
       const entries = model.commits
         .map((commit) => ({ commit, node: layout.commitsById.get(commit.id) }))
@@ -2192,13 +2283,22 @@ export class GitGraphPanel implements vscode.Disposable {
         const hiddenBranches = Array.isArray(entry.commit.hiddenMergeBranches)
           ? entry.commit.hiddenMergeBranches
           : [];
+        const secondParentId = Array.isArray(entry.commit.parents) && entry.commit.parents.length > 1
+          ? entry.commit.parents[1]
+          : '';
+        const secondParentCommit = secondParentId ? commitsById.get(secondParentId) : undefined;
+        const secondParentHasHiddenAncestors = Boolean(secondParentCommit)
+          && Number(secondParentCommit.hiddenParentCount || 0) > 0;
         const hasHiddenSecondParent = typeof entry.commit.hiddenMergeParentId === 'string'
           && entry.commit.hiddenMergeParentId.length > 0;
-        if (hiddenBranches.length === 0 && !hasHiddenSecondParent) {
+        if (hiddenBranches.length === 0 && !hasHiddenSecondParent && !secondParentHasHiddenAncestors) {
           return;
         }
 
         const targetBranch = hiddenBranches[0];
+        const mergeParentId = hasHiddenSecondParent
+          ? entry.commit.hiddenMergeParentId
+          : secondParentId;
         const node = entry.node;
         const markerX = node.x + markerOffsetX;
         const markerY = node.y;
@@ -2261,18 +2361,13 @@ export class GitGraphPanel implements vscode.Disposable {
             plusPath.classList.remove('loading');
           }, 15000);
 
-          if (targetBranch) {
-            requestHiddenMergeBranchExpansion(targetBranch, entry.commit.id);
-          } else {
-            requestHiddenEdgeExpansion('parents', entry.commit.id);
-          }
+          requestMergeParentExpansion(mergeParentId, targetBranch);
         });
         svg.appendChild(hitTarget);
       });
     }
 
     function wireFallbackInteractions(model, layout) {
-      const rows = getCommitElems();
       const circles = Array.from(document.querySelectorAll('#commitGraph circle[data-id]'));
 
       const activate = (id) => {
@@ -2294,16 +2389,6 @@ export class GitGraphPanel implements vscode.Disposable {
         clearFallbackActiveState();
         closeFallbackTooltip();
       };
-
-      rows.forEach((row) => {
-        const idValue = Number(row.dataset.id);
-        if (!Number.isInteger(idValue)) {
-          return;
-        }
-
-        row.addEventListener('mouseenter', () => activate(idValue));
-        row.addEventListener('mouseleave', deactivate);
-      });
 
       circles.forEach((circle) => {
         const idValue = Number(circle.dataset.id);
@@ -2327,7 +2412,14 @@ export class GitGraphPanel implements vscode.Disposable {
 
       const layout = buildFallbackLayout(model, config, rowCenterByCommitId);
       currentFallbackLayout = layout;
-      const width = layout.width;
+      const hasMergeBranchMarkers = model.commits.some((commit) => {
+        const hiddenBranches = Array.isArray(commit.hiddenMergeBranches) ? commit.hiddenMergeBranches : [];
+        return hiddenBranches.length > 0 || Boolean(commit.hiddenMergeParentId);
+      });
+      const mergeMarkerPadding = hasMergeBranchMarkers
+        ? Math.max(18, Number(layout?.lane || 48) * 0.5 + 8)
+        : 0;
+      const width = layout.width + mergeMarkerPadding;
       const height = layout.height;
       const strokeWidth = Math.max(1.5, Number(config?.strokeWidth ?? 2.2));
       const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -2423,6 +2515,8 @@ export class GitGraphPanel implements vscode.Disposable {
       renderHiddenMergeBranchMarkers(model, layout, svg, strokeWidth);
 
       document.getElementById('commitGraph')?.appendChild(svg);
+      const contentHeight = Math.max(height + 12, Number(tableElem.scrollHeight || 0));
+      graphColumnElem.style.height = Math.max(180, contentHeight) + 'px';
       graphColumnElem.style.width = Math.max(96, width + 12) + 'px';
       wireFallbackInteractions(model, layout);
     }
@@ -2690,6 +2784,10 @@ export class GitGraphPanel implements vscode.Disposable {
     }
 
     window.addEventListener('resize', scheduleGraphRealign);
+    viewElem.addEventListener('scroll', () => {
+      closeFallbackTooltip();
+      clearFallbackActiveState();
+    });
     if (typeof ResizeObserver !== 'undefined') {
       const tableObserver = new ResizeObserver(() => {
         scheduleGraphRealign();

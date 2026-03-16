@@ -124,7 +124,7 @@ function toWorkspaceRelativePath(folder: vscode.WorkspaceFolder, fileUri: vscode
   return relativePath.replace(/\\/g, '/');
 }
 
-type CommitAction = 'tag' | 'branch' | 'checkout' | 'cherry-pick' | 'patch' | 'revert' | 'squash';
+type CommitAction = 'tag' | 'branch' | 'checkout' | 'cherry-pick' | 'patch' | 'revert' | 'squash' | 'cumulative-patch';
 
 async function showCommitContextMenu(
   commitId: string,
@@ -136,6 +136,7 @@ async function showCommitContextMenu(
 
   const items: Array<{ label: string; description?: string; action: CommitAction }> = isMulti
     ? [
+        { label: '$(file-code) Extract Cumulative Patch', description: `${selectedCommitIds.length} commits as one diff`, action: 'cumulative-patch' },
         { label: '$(git-merge) Squash Commits', description: `${selectedCommitIds.length} commits → 1`, action: 'squash' }
       ]
     : [
@@ -251,15 +252,35 @@ async function executeCommitAction(
       void vscode.window.showInformationMessage(`Git Slice: squashed ${selectedCommitIds.length} commits.`);
       break;
     }
+
+    case 'cumulative-patch': {
+      const { newestSha, oldestSha, parentSha } = await resolveSelectedCommitBounds(repoPath, selectedCommitIds);
+      const patchContent = await runGitInRepo(repoPath, [
+        'diff',
+        '--binary',
+        '--full-index',
+        `${parentSha}..${newestSha}`
+      ]);
+
+      const defaultUri = vscode.Uri.file(path.join(repoPath, `${oldestSha}-${newestSha}.patch`));
+      const saveUri = await vscode.window.showSaveDialog({
+        defaultUri,
+        filters: { 'Patch files': ['patch', 'diff'], 'All files': ['*'] }
+      });
+      if (!saveUri) { return; }
+
+      await vscode.workspace.fs.writeFile(saveUri, Buffer.from(patchContent, 'utf8'));
+      void vscode.window.showInformationMessage(`Git Slice: cumulative patch saved to ${saveUri.fsPath}.`);
+      break;
+    }
   }
 }
 
-async function squashCommits(
+async function resolveSelectedCommitBounds(
   repoPath: string,
-  selectedCommitIds: string[],
-  message: string
-): Promise<void> {
-  // List only the specified commits sorted by date (newest first) without traversing ancestry.
+  selectedCommitIds: string[]
+): Promise<{ newestSha: string; oldestSha: string; parentSha: string }> {
+  // List only selected commits sorted by commit date (newest first) without ancestry traversal.
   const logOutput = await runGitInRepo(repoPath, [
     'log', '--no-walk=sorted', '--format=%H', ...selectedCommitIds
   ]);
@@ -267,8 +288,19 @@ async function squashCommits(
   if (orderedShas.length === 0) {
     throw new Error('Could not resolve the selected commits.');
   }
+
+  const newestSha = orderedShas[0];
   const oldestSha = orderedShas[orderedShas.length - 1];
   const parentSha = (await runGitInRepo(repoPath, ['rev-parse', `${oldestSha}^`])).trim();
+  return { newestSha, oldestSha, parentSha };
+}
+
+async function squashCommits(
+  repoPath: string,
+  selectedCommitIds: string[],
+  message: string
+): Promise<void> {
+  const { parentSha } = await resolveSelectedCommitBounds(repoPath, selectedCommitIds);
   await runGitInRepo(repoPath, ['reset', '--soft', parentSha]);
   await runGitInRepo(repoPath, ['commit', '-m', message]);
 }

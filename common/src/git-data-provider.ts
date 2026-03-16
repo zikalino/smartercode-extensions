@@ -21,6 +21,8 @@ export interface GitDataProvider {
   getGraphSlice(filter: GitGraphFilter): Promise<GraphModel>;
 }
 
+const MERGE_PARENT_BRANCH_PREFIX = 'merge-parent/';
+
 function splitCsv(value: string | undefined): string[] {
   if (!value) {
     return [];
@@ -104,7 +106,11 @@ export class LocalGitDataProvider implements GitDataProvider {
     const repoRoot = await resolveRepositoryRoot(filter.localPath);
     const fileSpecs = normalizeFileSpecs(filter.files);
     const availableBranchNames = await listLocalBranches(repoRoot);
-    const branchNames = filter.branches.length > 0 ? filter.branches : availableBranchNames;
+    const requestedMergeParentRefs = filter.branches
+      .map((name) => parseMergeParentBranchRef(name))
+      .filter((name): name is string => Boolean(name));
+    const requestedRealBranches = filter.branches.filter((name) => !isMergeParentBranchName(name));
+    const branchNames = requestedRealBranches.length > 0 ? requestedRealBranches : availableBranchNames;
     const commitRows = await listLocalCommits(repoRoot, filter.commitRange, fileSpecs);
     let tagsByCommitSha = new Map<string, string[]>();
     try {
@@ -133,8 +139,34 @@ export class LocalGitDataProvider implements GitDataProvider {
       throw new Error('No commits found for the selected local filter.');
     }
 
-    const branchMembership = await buildBranchMembership(repoRoot, availableBranchNames, fileSpecs);
     const included = new Set(commitRows.map((row) => row.sha));
+    const branchMembership = await buildBranchMembership(repoRoot, availableBranchNames, fileSpecs);
+    const mergeParentMembership = await buildMergeParentMembership(repoRoot, requestedMergeParentRefs, fileSpecs);
+    mergeParentMembership.forEach((membershipSet, branchName) => {
+      branchMembership.set(branchName, membershipSet);
+    });
+    const syntheticBranchNames = Array.from(mergeParentMembership.keys());
+    const allBranchNames = availableBranchNames.concat(syntheticBranchNames);
+    const preferredBranchNames = filter.branches.length > 0
+      ? orderPreferredBranches(filter.branches)
+      : branchNames;
+
+    const mergeSecondParentPairs = Array.from(new Set(
+      commitRows
+        .filter((row) => row.parents.length > 1)
+        .map((row) => `${row.parents[0]}|${row.parents[1]}`)
+    ));
+    const mergeParentBranchesByPair = new Map<string, string[]>();
+    await Promise.all(mergeSecondParentPairs.map(async (pairKey) => {
+      const [firstParentSha, secondParentSha] = pairKey.split('|');
+      try {
+        const branches = await listLocalLikelySourceBranchesForSecondParent(repoRoot, secondParentSha, firstParentSha);
+        mergeParentBranchesByPair.set(pairKey, branches);
+      } catch {
+        mergeParentBranchesByPair.set(pairKey, []);
+      }
+    }));
+
     let defaultActiveBranchNames: string[] = [];
     if (filter.branches.length === 0) {
       try {
@@ -146,7 +178,7 @@ export class LocalGitDataProvider implements GitDataProvider {
         defaultActiveBranchNames = [];
       }
     }
-    const activeBranches = new Set(filter.branches.length > 0 ? filter.branches : defaultActiveBranchNames);
+    const activeBranches = new Set(requestedRealBranches.length > 0 ? requestedRealBranches : defaultActiveBranchNames);
 
     const commits = commitRows.map((row) => ({
       hiddenMergeBranches: (() => {
@@ -154,8 +186,9 @@ export class LocalGitDataProvider implements GitDataProvider {
           return [];
         }
 
+        const pairKey = `${row.parents[0]}|${row.parents[1]}`;
         const secondParentSha = row.parents[1];
-        const secondParentBranches = findBranchesForCommit(secondParentSha, availableBranchNames, branchMembership);
+        const secondParentBranches = mergeParentBranchesByPair.get(pairKey) ?? [];
         return secondParentBranches.filter((branchName) => !activeBranches.has(branchName));
       })(),
       hiddenMergeParentId: (() => {
@@ -170,12 +203,32 @@ export class LocalGitDataProvider implements GitDataProvider {
 
         return shortSha(secondParentSha);
       })(),
-      branches: findBranchesForCommit(row.sha, availableBranchNames, branchMembership),
+      secondParentId: row.parents.length > 1 ? shortSha(row.parents[1]) : undefined,
+      secondParentKind: (() => {
+        if (row.parents.length < 2) {
+          return undefined;
+        }
+
+        const pairKey = `${row.parents[0]}|${row.parents[1]}`;
+        const secondParentBranches = mergeParentBranchesByPair.get(pairKey) ?? [];
+        return secondParentBranches.length > 0
+          ? ('branch' as const)
+          : ('detached' as const);
+      })(),
+      secondParentBranches: (() => {
+        if (row.parents.length < 2) {
+          return [];
+        }
+
+        const pairKey = `${row.parents[0]}|${row.parents[1]}`;
+        return mergeParentBranchesByPair.get(pairKey) ?? [];
+      })(),
+      branches: findBranchesForCommit(row.sha, allBranchNames, branchMembership),
       id: shortSha(row.sha),
       branch: findPreferredBranchForCommit(
         row.sha,
-        branchNames,
-        availableBranchNames,
+        preferredBranchNames,
+        allBranchNames,
         branchMembership
       ),
       parents: row.parents
@@ -429,6 +482,59 @@ async function listLocalBranches(repoRoot: string): Promise<string[]> {
   return branches.slice(0, 8);
 }
 
+async function buildMergeParentMembership(
+  repoRoot: string,
+  mergeParentRefs: string[],
+  fileSpecs: string[]
+): Promise<Map<string, Set<string>>> {
+  const membership = new Map<string, Set<string>>();
+  const refs = Array.from(new Set(
+    mergeParentRefs
+      .map((ref) => String(ref).trim())
+      .filter((ref) => ref.length > 0)
+  ));
+
+  await Promise.all(refs.map(async (mergeParentRef) => {
+    const syntheticBranchName = toMergeParentBranchName(mergeParentRef);
+    const args = ['rev-list', '--max-count=700', mergeParentRef];
+    if (fileSpecs.length > 0) {
+      args.push('--', ...fileSpecs);
+    }
+
+    try {
+      const output = await runGit(repoRoot, args);
+      const shas = output
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+      membership.set(syntheticBranchName, new Set(shas));
+    } catch {
+      membership.set(syntheticBranchName, new Set());
+    }
+  }));
+
+  return membership;
+}
+
+async function listLocalLikelySourceBranchesForSecondParent(
+  repoRoot: string,
+  secondParentSha: string,
+  firstParentSha: string
+): Promise<string[]> {
+  const output = await runGit(repoRoot, [
+    'for-each-ref',
+    '--contains=' + secondParentSha,
+    '--no-contains=' + firstParentSha,
+    '--format=%(refname:short)',
+    'refs/heads'
+  ]);
+
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
 async function listLocalCommits(
   repoRoot: string,
   commitRange: string | undefined,
@@ -601,6 +707,36 @@ function findPreferredBranchForCommit(
   }
 
   return findBranchForCommit(sha, allBranchNames, membership);
+}
+
+function isMergeParentBranchName(name: string): boolean {
+  return String(name || '').startsWith(MERGE_PARENT_BRANCH_PREFIX);
+}
+
+function orderPreferredBranches(branches: string[]): string[] {
+  const values = Array.from(new Set(
+    branches
+      .map((name) => String(name || '').trim())
+      .filter((name) => name.length > 0)
+  ));
+
+  const realBranches = values.filter((name) => !isMergeParentBranchName(name));
+  const syntheticBranches = values.filter((name) => isMergeParentBranchName(name));
+  return realBranches.concat(syntheticBranches);
+}
+
+function parseMergeParentBranchRef(name: string): string | undefined {
+  const value = String(name || '').trim();
+  if (!isMergeParentBranchName(value)) {
+    return undefined;
+  }
+
+  const ref = value.slice(MERGE_PARENT_BRANCH_PREFIX.length).trim();
+  return ref.length > 0 ? ref : undefined;
+}
+
+function toMergeParentBranchName(ref: string): string {
+  return MERGE_PARENT_BRANCH_PREFIX + shortSha(String(ref || '').trim());
 }
 
 async function runGit(cwd: string, args: string[]): Promise<string> {

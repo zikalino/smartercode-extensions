@@ -4,6 +4,9 @@ export type GraphCommit = {
   branches?: string[];
   hiddenMergeBranches?: string[];
   hiddenMergeParentId?: string;
+  secondParentId?: string;
+  secondParentKind?: 'branch' | 'detached';
+  secondParentBranches?: string[];
   parents: string[];
   message?: string;
   tags?: string[];
