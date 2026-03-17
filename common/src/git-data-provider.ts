@@ -225,6 +225,7 @@ export class LocalGitDataProvider implements GitDataProvider {
       })(),
       branches: findBranchesForCommit(row.sha, allBranchNames, branchMembership),
       id: shortSha(row.sha),
+      committedAt: row.committedAt,
       branch: findPreferredBranchForCommit(
         row.sha,
         preferredBranchNames,
@@ -270,7 +271,14 @@ export class RemoteGitDataProvider implements GitDataProvider {
       branchNames.map((branch) => this.fetchCommitsForBranch(owner, repo, branch, filter.commitRange))
     );
 
-    const allById = new Map<string, { id: string; branch: string; branches: string[]; parents: string[]; message: string }>();
+    const allById = new Map<string, {
+      id: string;
+      branch: string;
+      branches: string[];
+      parents: string[];
+      message: string;
+      committedAt?: string;
+    }>();
     for (let i = 0; i < branchNames.length; i++) {
       for (const commit of commitsByBranch[i]) {
         if (!allById.has(commit.id)) {
@@ -279,7 +287,8 @@ export class RemoteGitDataProvider implements GitDataProvider {
             branch: branchNames[i],
             branches: [branchNames[i]],
             parents: commit.parents,
-            message: commit.message
+            message: commit.message,
+            committedAt: commit.committedAt
           });
         }
       }
@@ -334,7 +343,7 @@ export class RemoteGitDataProvider implements GitDataProvider {
 
   private fetchCommitsForBranch(
     owner: string, repo: string, branch: string, commitRange: string | undefined
-  ): Promise<{ id: string; parents: string[]; message: string }[]> {
+  ): Promise<{ id: string; parents: string[]; message: string; committedAt?: string }[]> {
     return new Promise((resolve, reject) => {
       const shaParam = commitRange ? `&sha=${encodeURIComponent(commitRange.split('..').pop() ?? branch)}` : `&sha=${encodeURIComponent(branch)}`;
       const options = {
@@ -354,10 +363,11 @@ export class RemoteGitDataProvider implements GitDataProvider {
               return;
             }
             resolve(
-              data.map((c: { sha: string; parents: { sha: string }[]; commit?: { message?: string } }) => ({
+              data.map((c: { sha: string; parents: { sha: string }[]; commit?: { message?: string; author?: { date?: string } } }) => ({
                 id: c.sha.slice(0, 7),
                 parents: (c.parents ?? []).map((p: { sha: string }) => p.sha.slice(0, 7)),
-                message: String(c.commit?.message ?? '').split('\n')[0]
+                message: String(c.commit?.message ?? '').split('\n')[0],
+                committedAt: c.commit?.author?.date
               }))
             );
           } catch (err) {
@@ -378,95 +388,67 @@ export class GitDataProviderExample implements GitDataProvider {
   }
 
   async getGraphSlice(filter: GitGraphFilter): Promise<GraphModel> {
-    // A richer sample graph: main, develop, feature/auth, feature/cache, hotfix/security, release/2.0
-    const full: GraphModel = {
-      branches: ['main', 'develop', 'feature/auth', 'feature/cache', 'hotfix/security', 'release/2.0'],
-      commits: [
-        // Initial main commits
-        { id: 'c001', branch: 'main', parents: [] },
-        { id: 'c002', branch: 'main', parents: ['c001'] },
-        { id: 'c003', branch: 'main', parents: ['c002'] },
-
-        // develop branches off from main
-        { id: 'd001', branch: 'develop', parents: ['c003'] },
-        { id: 'd002', branch: 'develop', parents: ['d001'] },
-        { id: 'd003', branch: 'develop', parents: ['d002'] },
-
-        // feature/auth branches off develop
-        { id: 'a001', branch: 'feature/auth', parents: ['d002'] },
-        { id: 'a002', branch: 'feature/auth', parents: ['a001'] },
-        { id: 'a003', branch: 'feature/auth', parents: ['a002'] },
-        { id: 'a004', branch: 'feature/auth', parents: ['a003'] },
-
-        // feature/cache branches off develop
-        { id: 'k001', branch: 'feature/cache', parents: ['d001'] },
-        { id: 'k002', branch: 'feature/cache', parents: ['k001'] },
-        { id: 'k003', branch: 'feature/cache', parents: ['k002'] },
-
-        // hotfix/security branches off main
-        { id: 'h001', branch: 'hotfix/security', parents: ['c002'] },
-        { id: 'h002', branch: 'hotfix/security', parents: ['h001'] },
-
-        // develop merges hotfix and feature/cache
-        { id: 'd004', branch: 'develop', parents: ['d003', 'h002'] },
-        { id: 'd005', branch: 'develop', parents: ['d004', 'k003'] },
-
-        // main merges hotfix
-        { id: 'c004', branch: 'main', parents: ['c003', 'h002'] },
-
-        // A temporary branch is created, merged, and then deleted.
-        // We keep the lineage visible but omit the branch from `branches`
-        // so the sample exercises detached merge rendering.
-        { id: 't001', branch: 'temp/deleted', parents: ['c004'], message: 'Investigate production-only issue' },
-
-        // release/2.0 branches from develop
-        { id: 'r001', branch: 'release/2.0', parents: ['d005'] },
-        { id: 'r002', branch: 'release/2.0', parents: ['r001'] },
-        { id: 'r003', branch: 'release/2.0', parents: ['r002'] },
-
-        // feature/auth merges into develop
-        { id: 'd006', branch: 'develop', parents: ['d005', 'a004'] },
-
-        // main merges the deleted temp lineage
-        {
-          id: 'c005',
-          branch: 'main',
-          parents: ['c004', 't001'],
-          message: 'Merge temporary fix lineage',
-          secondParentId: 't001',
-          secondParentKind: 'detached',
-          secondParentBranches: []
-        },
-
-        // develop merges into main
-        {
-          id: 'c006',
-          branch: 'main',
-          parents: ['c005', 'd006'],
-          message: 'Merge develop into main',
-          secondParentId: 'd006',
-          secondParentKind: 'branch',
-          secondParentBranches: ['develop']
-        },
-
-        // final polish on main
-        { id: 'c007', branch: 'main', parents: ['c006'], message: 'Prepare release notes' },
-        { id: 'c008', branch: 'main', parents: ['c007'], message: 'Ship 2.0' }
-      ]
-    };
+    const full = createLargeSampleGraphModel(1000);
 
     // Keep sample ordering aligned with `git log` output (newest first)
     // so lane routing behaves the same as local/remote providers.
     return filterModel({
       ...full,
-      commits: [...full.commits].reverse()
+      commits: addSyntheticSampleTimestamps([...full.commits].reverse())
     }, filter);
   }
+}
+
+function createLargeSampleGraphModel(targetCount: number): GraphModel {
+  const branches = ['master'];
+  const commits: GraphModel['commits'] = [];
+  let previousId: string | undefined;
+
+  for (let index = 0; index < targetCount; index += 1) {
+    const id = `s${String(index + 1).padStart(5, '0')}`;
+    commits.push({
+      id,
+      branch: 'master',
+      parents: previousId ? [previousId] : [],
+      message: index === 0 ? 'Initial repository import' : `Master change ${index}`
+    });
+    previousId = id;
+  }
+
+  const tagNames = [
+    'v0.1.0',
+    'v0.2.0',
+    'v0.3.0',
+    'v0.4.0',
+    'v0.5.0',
+    'v1.0.0',
+    'v1.1.0',
+    'v1.2.0',
+    'v2.0.0-rc1',
+    'v2.0.0'
+  ];
+
+  for (let index = 0; index < tagNames.length; index += 1) {
+    const commitIndex = Math.floor((index * (commits.length - 1)) / Math.max(1, tagNames.length - 1));
+    const commit = commits[commitIndex];
+    if (!commit) {
+      continue;
+    }
+
+    commit.tags = [...(commit.tags ?? []), tagNames[index]];
+  }
+
+  return {
+    branches,
+    commits,
+    head: previousId
+  };
 }
 
 type LocalCommitRow = {
   sha: string;
   parents: string[];
+  committedAt: string;
   subject: string;
 };
 
@@ -570,7 +552,7 @@ async function listLocalCommits(
   fileSpecs: string[]
 ): Promise<LocalCommitRow[]> {
   const range = (commitRange ?? '').trim();
-  const args = ['log', '--max-count=180', '--pretty=format:%H%x09%P%x09%s'];
+  const args = ['log', '--max-count=180', '--pretty=format:%H%x09%P%x09%cI%x09%s'];
 
   if (range.length > 0) {
     args.push(range);
@@ -588,14 +570,25 @@ async function listLocalCommits(
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
     .map((line) => {
-      const [sha = '', parents = '', ...subjectParts] = line.split('\t');
+      const [sha = '', parents = '', committedAt = '', ...subjectParts] = line.split('\t');
       return {
         sha,
         parents: parents.length > 0 ? parents.split(' ').filter((part) => part.length > 0) : [],
+        committedAt,
         subject: subjectParts.join('\t').trim()
       };
     })
     .filter((row) => row.sha.length > 0);
+}
+
+function addSyntheticSampleTimestamps(commits: GraphModel['commits']): GraphModel['commits'] {
+  const newest = Date.UTC(2026, 2, 17, 16, 0, 0);
+  const stepMs = 90 * 60 * 1000;
+
+  return commits.map((commit, index) => ({
+    ...commit,
+    committedAt: commit.committedAt ?? new Date(newest - index * stepMs).toISOString()
+  }));
 }
 
 async function buildBranchMembership(

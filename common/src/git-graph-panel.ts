@@ -748,6 +748,14 @@ export class GitGraphPanel implements vscode.Disposable {
       min-width: 110px;
     }
 
+    .commit-time {
+      font-size: 11px;
+      opacity: 0.78;
+      min-width: 150px;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+
     .commit-branch {
       font-size: 11px;
       opacity: 0.8;
@@ -1489,6 +1497,26 @@ export class GitGraphPanel implements vscode.Disposable {
     function abbrevCommit(hash) {
       const value = String(hash ?? '');
       return value.length > 10 ? value.substring(0, 10) : value;
+    }
+
+    function formatCommitTimestamp(value) {
+      const raw = String(value || '').trim();
+      if (!raw) {
+        return '';
+      }
+
+      const date = new Date(raw);
+      if (!Number.isFinite(date.getTime())) {
+        return raw;
+      }
+
+      return new Intl.DateTimeFormat(undefined, {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      }).format(date);
     }
 
     function getBranchLabels(heads, remotes) {
@@ -2602,6 +2630,14 @@ export class GitGraphPanel implements vscode.Disposable {
         id.className = 'commit-id';
         id.textContent = commit.id;
 
+        const committedAt = document.createElement('div');
+        committedAt.className = 'commit-time';
+        const formattedCommittedAt = formatCommitTimestamp(commit.committedAt);
+        committedAt.textContent = formattedCommittedAt || '-';
+        if (formattedCommittedAt && commit.committedAt) {
+          committedAt.title = String(commit.committedAt);
+        }
+
         const branch = document.createElement('div');
         branch.className = 'commit-branch';
         branch.textContent = commit.branch;
@@ -2611,6 +2647,7 @@ export class GitGraphPanel implements vscode.Disposable {
         message.textContent = String(commit.message || '');
 
         row.appendChild(id);
+        row.appendChild(committedAt);
         row.appendChild(branch);
 
         const allCommitBranches = Array.isArray(commit.branches) ? commit.branches : [];
