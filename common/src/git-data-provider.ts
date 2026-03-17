@@ -414,6 +414,11 @@ export class GitDataProviderExample implements GitDataProvider {
         // main merges hotfix
         { id: 'c004', branch: 'main', parents: ['c003', 'h002'] },
 
+        // A temporary branch is created, merged, and then deleted.
+        // We keep the lineage visible but omit the branch from `branches`
+        // so the sample exercises detached merge rendering.
+        { id: 't001', branch: 'temp/deleted', parents: ['c004'], message: 'Investigate production-only issue' },
+
         // release/2.0 branches from develop
         { id: 'r001', branch: 'release/2.0', parents: ['d005'] },
         { id: 'r002', branch: 'release/2.0', parents: ['r001'] },
@@ -422,12 +427,31 @@ export class GitDataProviderExample implements GitDataProvider {
         // feature/auth merges into develop
         { id: 'd006', branch: 'develop', parents: ['d005', 'a004'] },
 
+        // main merges the deleted temp lineage
+        {
+          id: 'c005',
+          branch: 'main',
+          parents: ['c004', 't001'],
+          message: 'Merge temporary fix lineage',
+          secondParentId: 't001',
+          secondParentKind: 'detached',
+          secondParentBranches: []
+        },
+
         // develop merges into main
-        { id: 'c005', branch: 'main', parents: ['c004', 'd006'] },
+        {
+          id: 'c006',
+          branch: 'main',
+          parents: ['c005', 'd006'],
+          message: 'Merge develop into main',
+          secondParentId: 'd006',
+          secondParentKind: 'branch',
+          secondParentBranches: ['develop']
+        },
 
         // final polish on main
-        { id: 'c006', branch: 'main', parents: ['c005'] },
-        { id: 'c007', branch: 'main', parents: ['c006'] }
+        { id: 'c007', branch: 'main', parents: ['c006'], message: 'Prepare release notes' },
+        { id: 'c008', branch: 'main', parents: ['c007'], message: 'Ship 2.0' }
       ]
     };
 

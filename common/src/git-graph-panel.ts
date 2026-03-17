@@ -519,7 +519,16 @@ export class GitGraphPanel implements vscode.Disposable {
       stroke-width: 2.4;
     }
 
+    #commitGraph circle.merge.detached-merge {
+      stroke-dasharray: 2.5 2.5;
+    }
+
     #commitGraph circle.mergeInner {
+      pointer-events: none;
+      stroke: none;
+    }
+
+    #commitGraph rect.detachedMergeInner {
       pointer-events: none;
       stroke: none;
     }
@@ -783,6 +792,18 @@ export class GitGraphPanel implements vscode.Disposable {
       border: 1px solid color-mix(in srgb, var(--vscode-charts-yellow) 62%, var(--vscode-editorWidget-border));
       background: color-mix(in srgb, var(--vscode-charts-yellow) 16%, transparent);
       color: color-mix(in srgb, var(--vscode-charts-yellow) 95%, var(--vscode-foreground));
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+    }
+
+    .commit-merge-detached {
+      font-size: 10px;
+      line-height: 14px;
+      padding: 0 6px;
+      border-radius: 10px;
+      border: 1px dashed color-mix(in srgb, var(--vscode-charts-blue) 58%, var(--vscode-editorWidget-border));
+      background: color-mix(in srgb, var(--vscode-charts-blue) 12%, transparent);
+      color: color-mix(in srgb, var(--vscode-charts-blue) 92%, var(--vscode-foreground));
       text-transform: uppercase;
       letter-spacing: 0.02em;
     }
@@ -2464,6 +2485,7 @@ export class GitGraphPanel implements vscode.Disposable {
         }
 
         const isMerge = Array.isArray(commit.parents) && commit.parents.length > 1;
+        const isDetachedMerge = isMerge && commit.secondParentKind === 'detached';
         const branchColor = COLORS[node.branchColorIndex % COLORS.length];
 
         const circle = document.createElementNS(SVG_NAMESPACE, 'circle');
@@ -2478,12 +2500,12 @@ export class GitGraphPanel implements vscode.Disposable {
           circle.dataset.merge = 'true';
         }
         if (node.isCurrent) {
-          circle.setAttribute('class', isMerge ? 'current merge' : 'current');
+          circle.setAttribute('class', isMerge ? ('current merge' + (isDetachedMerge ? ' detached-merge' : '')) : 'current');
           circle.setAttribute('fill', 'var(--vscode-editor-background)');
           circle.setAttribute('stroke', branchColor);
           circle.setAttribute('stroke-width', String(strokeWidth));
         } else if (isMerge) {
-          circle.setAttribute('class', 'merge');
+          circle.setAttribute('class', isDetachedMerge ? 'merge detached-merge' : 'merge');
           circle.setAttribute('fill', 'var(--vscode-editor-background)');
           circle.style.stroke = branchColor;
           circle.style.strokeWidth = String(Math.max(2.2, strokeWidth));
@@ -2503,13 +2525,27 @@ export class GitGraphPanel implements vscode.Disposable {
         svg.appendChild(circle);
 
         if (isMerge) {
-          const innerDot = document.createElementNS(SVG_NAMESPACE, 'circle');
-          innerDot.setAttribute('class', 'mergeInner');
-          innerDot.setAttribute('cx', String(node.x));
-          innerDot.setAttribute('cy', String(node.y));
-          innerDot.setAttribute('r', node.isCurrent ? '1.8' : '1.6');
-          innerDot.setAttribute('fill', branchColor);
-          svg.appendChild(innerDot);
+          if (isDetachedMerge) {
+            const innerSquare = document.createElementNS(SVG_NAMESPACE, 'rect');
+            const size = node.isCurrent ? 3.6 : 3.2;
+            innerSquare.setAttribute('class', 'detachedMergeInner');
+            innerSquare.setAttribute('x', String(node.x - size / 2));
+            innerSquare.setAttribute('y', String(node.y - size / 2));
+            innerSquare.setAttribute('width', String(size));
+            innerSquare.setAttribute('height', String(size));
+            innerSquare.setAttribute('rx', '0.8');
+            innerSquare.setAttribute('ry', '0.8');
+            innerSquare.setAttribute('fill', branchColor);
+            svg.appendChild(innerSquare);
+          } else {
+            const innerDot = document.createElementNS(SVG_NAMESPACE, 'circle');
+            innerDot.setAttribute('class', 'mergeInner');
+            innerDot.setAttribute('cx', String(node.x));
+            innerDot.setAttribute('cy', String(node.y));
+            innerDot.setAttribute('r', node.isCurrent ? '1.8' : '1.6');
+            innerDot.setAttribute('fill', branchColor);
+            svg.appendChild(innerDot);
+          }
         }
       }
 
@@ -2619,6 +2655,14 @@ export class GitGraphPanel implements vscode.Disposable {
           mergePill.className = 'commit-merge';
           mergePill.textContent = 'merge';
           row.appendChild(mergePill);
+
+          if (commit.secondParentKind === 'detached') {
+            const detachedPill = document.createElement('div');
+            detachedPill.className = 'commit-merge-detached';
+            detachedPill.textContent = 'detached';
+            detachedPill.title = 'Merged from lineage with no surviving branch ref';
+            row.appendChild(detachedPill);
+          }
         }
 
         row.appendChild(message);
@@ -2956,10 +3000,28 @@ function createSampleGraphModel(): GraphModel {
     commits: [
       { id: 'A0', branch: 'main', parents: [] },
       { id: 'A1', branch: 'main', parents: ['A0'] },
-      { id: 'F1', branch: 'feature/auth', parents: ['A1'] },
+      { id: 'T1', branch: 'temp/deleted', parents: ['A1'], message: 'Temporary branch commit' },
+      {
+        id: 'M1',
+        branch: 'main',
+        parents: ['A1', 'T1'],
+        message: 'Merge deleted temp branch',
+        secondParentId: 'T1',
+        secondParentKind: 'detached',
+        secondParentBranches: []
+      },
+      { id: 'F1', branch: 'feature/auth', parents: ['M1'] },
       { id: 'F2', branch: 'feature/auth', parents: ['F1'] },
-      { id: 'M1', branch: 'main', parents: ['A1', 'F2'] },
-      { id: 'R1', branch: 'release/1.1', parents: ['M1'] },
+      {
+        id: 'M2',
+        branch: 'main',
+        parents: ['M1', 'F2'],
+        message: 'Merge feature/auth',
+        secondParentId: 'F2',
+        secondParentKind: 'branch',
+        secondParentBranches: ['feature/auth']
+      },
+      { id: 'R1', branch: 'release/1.1', parents: ['M2'] },
       { id: 'R2', branch: 'release/1.1', parents: ['R1'] }
     ]
   };
