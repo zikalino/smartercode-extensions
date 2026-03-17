@@ -13,6 +13,7 @@ export interface GitGraphFilter {
   branches: string[];
   files: string[];
   commitRange?: string;
+  commitRanges?: string[];
 }
 
 export interface GitDataProvider {
@@ -60,6 +61,9 @@ export function parseGitGraphUri(uri: string): GitGraphFilter {
   const params = new URLSearchParams(query);
   const branches = splitCsv(params.get('branches') ?? undefined);
   const files = splitCsv(params.get('files') ?? undefined);
+  const commitRanges = params.getAll('range')
+    .map((value) => String(value).trim())
+    .filter((value) => value.length > 0);
 
   return {
     uri,
@@ -68,7 +72,8 @@ export function parseGitGraphUri(uri: string): GitGraphFilter {
     remoteUrl: source === 'remote' ? decodeURIComponent(targetPart) : undefined,
     branches,
     files,
-    commitRange: params.get('range') ?? undefined
+    commitRange: commitRanges[0] ?? params.get('range') ?? undefined,
+    commitRanges
   };
 }
 
@@ -87,7 +92,12 @@ export function buildGitGraphUri(filter: GitGraphFilter): string {
   if (filter.files.length > 0) {
     params.set('files', encodeCsv(filter.files));
   }
-  if (filter.commitRange && filter.commitRange.trim().length > 0) {
+  const commitRanges = (filter.commitRanges ?? [])
+    .map((value) => String(value).trim())
+    .filter((value) => value.length > 0);
+  if (commitRanges.length > 0) {
+    commitRanges.forEach((value) => params.append('range', value));
+  } else if (filter.commitRange && filter.commitRange.trim().length > 0) {
     params.set('range', filter.commitRange.trim());
   }
 
@@ -777,29 +787,34 @@ function filterModel(model: GraphModel, filter: GitGraphFilter): GraphModel {
   let workingModel = model;
 
   // Sample provider data does not naturally understand git rev ranges, so we
-  // map HEAD~N..HEAD to a deterministic "latest N commits" window.
+  // map HEAD-based ranges to deterministic windows over the generated history.
   if (filter.source === 'sample') {
     const range = String(filter.commitRange ?? '').trim();
-    const headWindowMatch = range.match(/^HEAD~(\d+)\.\.HEAD$/i);
-    if (headWindowMatch) {
-      const depth = Number(headWindowMatch[1]);
-      if (Number.isFinite(depth) && depth > 0) {
-        const visibleCommits = workingModel.commits.slice(0, Math.min(workingModel.commits.length, depth));
-        const hiddenOlderCount = Math.max(0, workingModel.commits.length - visibleCommits.length);
+    const sampleWindow = resolveSampleCommitWindow(range, workingModel.commits.length);
+    if (sampleWindow) {
+      const visibleCommits = workingModel.commits.slice(sampleWindow.startIndex, sampleWindow.endExclusive);
+      const hiddenNewerCount = sampleWindow.startIndex;
+      const hiddenOlderCount = Math.max(0, workingModel.commits.length - sampleWindow.endExclusive);
 
-        if (hiddenOlderCount > 0 && visibleCommits.length > 0) {
-          const oldestVisibleIndex = visibleCommits.length - 1;
-          visibleCommits[oldestVisibleIndex] = {
-            ...visibleCommits[oldestVisibleIndex],
-            hiddenParentCount: (visibleCommits[oldestVisibleIndex].hiddenParentCount ?? 0) + hiddenOlderCount
-          };
-        }
-
-        workingModel = {
-          ...workingModel,
-          commits: visibleCommits
+      if (hiddenNewerCount > 0 && visibleCommits.length > 0) {
+        visibleCommits[0] = {
+          ...visibleCommits[0],
+          hiddenChildCount: (visibleCommits[0].hiddenChildCount ?? 0) + hiddenNewerCount
         };
       }
+
+      if (hiddenOlderCount > 0 && visibleCommits.length > 0) {
+        const oldestVisibleIndex = visibleCommits.length - 1;
+        visibleCommits[oldestVisibleIndex] = {
+          ...visibleCommits[oldestVisibleIndex],
+          hiddenParentCount: (visibleCommits[oldestVisibleIndex].hiddenParentCount ?? 0) + hiddenOlderCount
+        };
+      }
+
+      workingModel = {
+        ...workingModel,
+        commits: visibleCommits
+      };
     }
   }
 
@@ -863,4 +878,48 @@ function filterModel(model: GraphModel, filter: GitGraphFilter): GraphModel {
     commits: normalizedCommits,
     head: model.head
   };
+}
+
+function resolveSampleCommitWindow(
+  range: string,
+  commitCount: number
+): { startIndex: number; endExclusive: number } | undefined {
+  const trimmed = String(range || '').trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const parts = trimmed.split('..');
+  if (parts.length !== 2) {
+    return undefined;
+  }
+
+  const olderDepth = parseSampleHeadDepth(parts[0]);
+  const newerDepth = parseSampleHeadDepth(parts[1]);
+  if (olderDepth === undefined || newerDepth === undefined) {
+    return undefined;
+  }
+
+  const startIndex = Math.max(0, Math.min(commitCount, newerDepth));
+  const endExclusive = Math.max(startIndex, Math.min(commitCount, olderDepth));
+  if (startIndex === endExclusive) {
+    return undefined;
+  }
+
+  return { startIndex, endExclusive };
+}
+
+function parseSampleHeadDepth(value: string): number | undefined {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (normalized === 'HEAD') {
+    return 0;
+  }
+
+  const match = normalized.match(/^HEAD~(\d+)$/);
+  if (!match) {
+    return undefined;
+  }
+
+  const depth = Number(match[1]);
+  return Number.isFinite(depth) && depth >= 0 ? depth : undefined;
 }

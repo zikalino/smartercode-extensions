@@ -3,6 +3,10 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   buildGitGraphUri,
+  GraphCommit,
+  GraphModel,
+  GitDataProvider,
+  GitDataProviderExample,
   GitGraphFilter,
   GitGraphPanel,
   LocalGitDataProvider
@@ -10,17 +14,29 @@ import {
 
 const OPEN_VIEW_COMMAND = 'gitSlice.openView';
 const SHOW_CONTEXT_COMMAND = 'gitSlice.showGitContext';
+const ADD_SLICE_COMMAND = 'gitSlice.addSlice';
 
 let currentRepoPath: string | undefined;
+let activeSlices: Array<{ filter: GitGraphFilter; model: GraphModel }> = [];
 
 export function activate(context: vscode.ExtensionContext): void {
   const localProvider = new LocalGitDataProvider();
+  const sampleProvider = new GitDataProviderExample();
   const panel = new GitGraphPanel({
     panelId: 'gitSlice.panel',
     title: 'Git Slice',
     branchLaneDistance: 14,
     commitVerticalDistance: 26,
     strokeWidth: 2.5,
+    onFilterApplied: (filter, model) => {
+      activeSlices = [{ filter, model }];
+      if (filter.source === 'local' && filter.localPath) {
+        currentRepoPath = filter.localPath;
+      }
+    },
+    onSliceDividerAction: (action, range) => {
+      void handleSliceDividerAction(action, range, panel, localProvider, sampleProvider);
+    },
     onCommitContextMenu: (commitId, branch, selectedCommitIds) => {
       if (!currentRepoPath) {
         void vscode.window.showWarningMessage('Git Slice: no repository path available.');
@@ -48,7 +64,7 @@ export function activate(context: vscode.ExtensionContext): void {
     filter.uri = buildGitGraphUri(filter);
     currentRepoPath = workspaceFolder.uri.fsPath;
 
-    await openSlice(panel, localProvider, filter);
+    await openSlice(panel, localProvider, sampleProvider, filter, false);
   });
 
   const showContextDisposable = vscode.commands.registerCommand(SHOW_CONTEXT_COMMAND, async (resource?: vscode.Uri) => {
@@ -76,10 +92,86 @@ export function activate(context: vscode.ExtensionContext): void {
     filter.uri = buildGitGraphUri(filter);
     currentRepoPath = workspaceFolder.uri.fsPath;
 
-    await openSlice(panel, localProvider, filter);
+    await openSlice(panel, localProvider, sampleProvider, filter, false);
   });
 
-  context.subscriptions.push(openWorkspaceDisposable, showContextDisposable, panel);
+  const addSliceDisposable = vscode.commands.registerCommand(ADD_SLICE_COMMAND, async () => {
+    if (!currentRepoPath) {
+      const workspaceFolder = getPrimaryWorkspaceFolder();
+      if (!workspaceFolder) {
+        void vscode.window.showWarningMessage('Git Slice: open a workspace folder first.');
+        return;
+      }
+
+      const initialFilter: GitGraphFilter = {
+        uri: '',
+        source: 'local',
+        localPath: workspaceFolder.uri.fsPath,
+        branches: [],
+        files: [],
+        commitRange: 'HEAD~5..HEAD'
+      };
+      initialFilter.uri = buildGitGraphUri(initialFilter);
+      currentRepoPath = workspaceFolder.uri.fsPath;
+      await openSlice(panel, localProvider, sampleProvider, initialFilter, false);
+    }
+
+    const query = await vscode.window.showInputBox({
+      title: 'Git Slice: Add Slice',
+      prompt: 'Enter tag, commit, commit range, or message text',
+      placeHolder: 'Examples: v1.2.0, 3c621c3, HEAD~50..HEAD~20, scheduler timeout'
+    });
+    if (!query || query.trim().length === 0) {
+      return;
+    }
+
+    const baseFilter = activeSlices[activeSlices.length - 1]?.filter;
+    const source = baseFilter?.source ?? 'local';
+
+    const candidates = source === 'sample'
+      ? await resolveSampleSliceCandidates(sampleProvider, query.trim())
+      : await resolveLocalSliceCandidates(currentRepoPath!, query.trim());
+    if (candidates.length === 0) {
+      void vscode.window.showWarningMessage(`Git Slice: no commits matched "${query.trim()}".`);
+      return;
+    }
+
+    let selected = candidates[0];
+    if (candidates.length > 1) {
+      const picked = await vscode.window.showQuickPick(
+        candidates.map((candidate) => ({
+          label: candidate.label,
+          description: candidate.description,
+          detail: candidate.detail,
+          candidate
+        })),
+        {
+          title: 'Git Slice: Select a slice candidate',
+          placeHolder: 'Choose which range to add'
+        }
+      );
+
+      if (!picked) {
+        return;
+      }
+      selected = picked.candidate;
+    }
+
+    const nextFilter: GitGraphFilter = {
+      uri: '',
+      source,
+      localPath: source === 'local' ? currentRepoPath : undefined,
+      branches: baseFilter?.branches ?? [],
+      files: baseFilter?.files ?? [],
+      commitRange: selected.range
+    };
+    nextFilter.uri = buildGitGraphUri(nextFilter);
+
+    await openSlice(panel, localProvider, sampleProvider, nextFilter, true);
+    void vscode.window.showInformationMessage(`Git Slice: added slice ${selected.range}.`);
+  });
+
+  context.subscriptions.push(openWorkspaceDisposable, showContextDisposable, addSliceDisposable, panel);
 }
 
 export function deactivate(): void {
@@ -87,19 +179,340 @@ export function deactivate(): void {
 
 async function openSlice(
   panel: GitGraphPanel,
-  provider: LocalGitDataProvider,
-  filter: GitGraphFilter
+  localProvider: LocalGitDataProvider,
+  sampleProvider: GitDataProviderExample,
+  filter: GitGraphFilter,
+  append: boolean
 ): Promise<void> {
   panel.showLoading(filter);
 
   try {
+    const provider: GitDataProvider = filter.source === 'sample' ? sampleProvider : localProvider;
     const model = await provider.getGraphSlice(filter);
-    panel.showModel(model, filter);
+    if (append) {
+      activeSlices.push({ filter, model });
+    } else {
+      activeSlices = [{ filter, model }];
+    }
+
+    const combined = mergeSliceModels(activeSlices.map((entry) => entry.model));
+    const displayFilter = buildDisplayFilter(activeSlices.map((entry) => entry.filter), filter);
+    panel.showModel(combined, displayFilter);
   } catch (error) {
     panel.hideLoading();
     const details = error instanceof Error ? error.message : String(error);
     void vscode.window.showErrorMessage(`Git Slice: failed to load history. ${details}`);
   }
+}
+
+function buildDisplayFilter(filters: GitGraphFilter[], fallback: GitGraphFilter): GitGraphFilter {
+  if (filters.length === 0) {
+    return fallback;
+  }
+
+  const first = filters[0];
+  const commitRanges = filters
+    .map((entry) => String(entry.commitRange || '').trim())
+    .filter((value) => value.length > 0);
+
+  const displayFilter: GitGraphFilter = {
+    ...first,
+    commitRange: commitRanges[0] ?? first.commitRange,
+    commitRanges
+  };
+  displayFilter.uri = buildGitGraphUri(displayFilter);
+  return displayFilter;
+}
+
+async function handleSliceDividerAction(
+  action: 'remove' | 'expand',
+  range: string,
+  panel: GitGraphPanel,
+  localProvider: LocalGitDataProvider,
+  sampleProvider: GitDataProviderExample
+): Promise<void> {
+  const index = activeSlices.findIndex((entry, idx) => idx > 0 && String(entry.filter.commitRange || '').trim() === String(range || '').trim());
+  if (index < 0) {
+    void vscode.window.showWarningMessage('Git Slice: slice range was not found.');
+    return;
+  }
+
+  if (action === 'remove') {
+    activeSlices.splice(index, 1);
+    renderActiveSlices(panel);
+    void vscode.window.showInformationMessage(`Git Slice: removed slice ${range}.`);
+    return;
+  }
+
+  const target = activeSlices[index];
+  const expandedRange = expandSliceRange(String(target.filter.commitRange || ''));
+  if (!expandedRange) {
+    void vscode.window.showWarningMessage(`Git Slice: cannot expand range ${target.filter.commitRange || ''}.`);
+    return;
+  }
+
+  const nextFilter: GitGraphFilter = {
+    ...target.filter,
+    commitRange: expandedRange,
+    commitRanges: target.filter.commitRanges
+  };
+  nextFilter.uri = buildGitGraphUri(nextFilter);
+
+  const provider: GitDataProvider = nextFilter.source === 'sample' ? sampleProvider : localProvider;
+  const model = await provider.getGraphSlice(nextFilter);
+  activeSlices[index] = { filter: nextFilter, model };
+
+  renderActiveSlices(panel);
+  void vscode.window.showInformationMessage(`Git Slice: expanded slice to ${expandedRange}.`);
+}
+
+function renderActiveSlices(panel: GitGraphPanel): void {
+  if (activeSlices.length === 0) {
+    return;
+  }
+
+  const combined = mergeSliceModels(activeSlices.map((entry) => entry.model));
+  const displayFilter = buildDisplayFilter(activeSlices.map((entry) => entry.filter), activeSlices[0].filter);
+  panel.showModel(combined, displayFilter);
+}
+
+function expandSliceRange(range: string): string | undefined {
+  const value = String(range || '').trim();
+  if (!value.includes('..')) {
+    return undefined;
+  }
+
+  const headToHeadMatch = value.match(/^HEAD~(\d+)\.\.HEAD~(\d+)$/i);
+  if (headToHeadMatch) {
+    const older = Number(headToHeadMatch[1]);
+    const newer = Number(headToHeadMatch[2]);
+    if (!Number.isFinite(older) || !Number.isFinite(newer) || older < newer) {
+      return undefined;
+    }
+    const expandedOlder = older + 80;
+    const expandedNewer = Math.max(0, newer - 20);
+    return `HEAD~${expandedOlder}..${expandedNewer === 0 ? 'HEAD' : `HEAD~${expandedNewer}`}`;
+  }
+
+  const refMatch = value.match(/^(.+?)~(\d+)\.\.\1$/);
+  if (refMatch) {
+    const base = refMatch[1];
+    const depth = Number(refMatch[2]);
+    if (!Number.isFinite(depth)) {
+      return undefined;
+    }
+    return `${base}~${depth + 40}..${base}`;
+  }
+
+  const headTailMatch = value.match(/^HEAD~(\d+)\.\.HEAD$/i);
+  if (headTailMatch) {
+    const older = Number(headTailMatch[1]);
+    if (!Number.isFinite(older)) {
+      return undefined;
+    }
+    return `HEAD~${older + 80}..HEAD`;
+  }
+
+  return undefined;
+}
+
+type SliceQueryCandidate = {
+  label: string;
+  description?: string;
+  detail?: string;
+  range: string;
+};
+
+async function resolveSliceCandidates(repoPath: string, query: string): Promise<SliceQueryCandidate[]> {
+  if (query.includes('..')) {
+    return [{ label: `Range ${query}`, detail: 'Commit range', range: query }];
+  }
+
+  const directCommit = await tryResolveCommit(repoPath, query);
+  if (directCommit) {
+    const range = `${directCommit}~20..${directCommit}`;
+    return [{
+      label: `${directCommit.slice(0, 10)} (tag/commit)`,
+      detail: range,
+      range
+    }];
+  }
+
+  const output = await runGitInRepo(repoPath, [
+    'log',
+    '--all',
+    '--max-count=30',
+    '--date=short',
+    '--format=%H%x09%ad%x09%s',
+    '--regexp-ignore-case',
+    '--grep',
+    query
+  ]).catch(() => '');
+
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const [sha = '', date = '', ...subjectParts] = line.split('\t');
+      const subject = subjectParts.join('\t').trim();
+      const range = `${sha}~20..${sha}`;
+      return {
+        label: `${sha.slice(0, 10)} ${subject || '(no message)'}`,
+        description: date,
+        detail: range,
+        range
+      } as SliceQueryCandidate;
+    })
+    .filter((candidate) => candidate.range.length > 0);
+}
+
+async function resolveSampleSliceCandidates(
+  sampleProvider: GitDataProviderExample,
+  query: string
+): Promise<SliceQueryCandidate[]> {
+  const fullModel = await sampleProvider.getGraphSlice({
+    uri: 'gitgraph://sample/',
+    source: 'sample',
+    branches: [],
+    files: []
+  });
+
+  if (query.includes('..')) {
+    return [{ label: `Range ${query}`, detail: 'Commit range', range: query }];
+  }
+
+  const normalized = query.trim().toLowerCase();
+  const commits = fullModel.commits;
+
+  const makeRangeAroundIndex = (index: number, window = 24): string => {
+    const maxIndex = Math.max(0, commits.length - 1);
+    const clamped = Math.max(0, Math.min(index, maxIndex));
+    const olderDepth = Math.min(maxIndex, clamped + window);
+    const newerDepth = Math.max(0, clamped);
+    const olderRef = olderDepth === 0 ? 'HEAD' : `HEAD~${olderDepth}`;
+    const newerRef = newerDepth === 0 ? 'HEAD' : `HEAD~${newerDepth}`;
+    return `${olderRef}..${newerRef}`;
+  };
+
+  const isCommitIdQuery = /^[a-z0-9]{4,}$/i.test(query);
+  if (isCommitIdQuery) {
+    const index = commits.findIndex((commit) => commit.id.toLowerCase().startsWith(normalized));
+    if (index >= 0) {
+      const range = makeRangeAroundIndex(index);
+      return [{
+        label: `${commits[index].id} (sample commit)`,
+        detail: range,
+        range
+      }];
+    }
+  }
+
+  const tagIndex = commits.findIndex((commit) =>
+    Array.isArray(commit.tags) && commit.tags.some((tag) => tag.toLowerCase() === normalized)
+  );
+  if (tagIndex >= 0) {
+    const matchedTag = commits[tagIndex].tags?.find((tag) => tag.toLowerCase() === normalized) ?? query;
+    const range = makeRangeAroundIndex(tagIndex);
+    return [{
+      label: `${matchedTag} (sample tag)`,
+      detail: range,
+      range
+    }];
+  }
+
+  return commits
+    .map((commit, index) => ({ commit, index }))
+    .filter(({ commit }) => String(commit.message || '').toLowerCase().includes(normalized))
+    .slice(0, 30)
+    .map(({ commit, index }) => {
+      const range = makeRangeAroundIndex(index);
+      return {
+        label: `${commit.id} ${String(commit.message || '(no message)')}`,
+        description: commit.committedAt ? new Date(commit.committedAt).toLocaleDateString() : undefined,
+        detail: range,
+        range
+      } as SliceQueryCandidate;
+    });
+}
+
+async function resolveLocalSliceCandidates(repoPath: string, query: string): Promise<SliceQueryCandidate[]> {
+  return resolveSliceCandidates(repoPath, query);
+}
+
+async function tryResolveCommit(repoPath: string, value: string): Promise<string | undefined> {
+  try {
+    const resolved = await runGitInRepo(repoPath, ['rev-parse', '--verify', '--quiet', `${value}^{commit}`]);
+    const sha = resolved.trim();
+    return sha.length > 0 ? sha : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function mergeSliceModels(models: GraphModel[]): GraphModel {
+  const byId = new Map<string, GraphCommit>();
+  const orderedIds: string[] = [];
+  const seen = new Set<string>();
+
+  const mergeUnique = (left: string[] | undefined, right: string[] | undefined): string[] | undefined => {
+    const values = [...(left ?? []), ...(right ?? [])]
+      .map((value) => String(value).trim())
+      .filter((value) => value.length > 0);
+    if (values.length === 0) {
+      return undefined;
+    }
+    return Array.from(new Set(values));
+  };
+
+  models.forEach((model, modelIndex) => {
+    let firstUniqueCommitMarked = false;
+    model.commits.forEach((commit) => {
+      const commitWithSliceMeta: GraphCommit = {
+        ...commit,
+        sliceBreakBefore: commit.sliceBreakBefore || (!firstUniqueCommitMarked && modelIndex > 0),
+        sliceLabel: commit.sliceLabel || (!firstUniqueCommitMarked && modelIndex > 0 ? (activeSlices[modelIndex]?.filter.commitRange || 'Additional Slice') : undefined)
+      };
+
+      if (!seen.has(commit.id)) {
+        seen.add(commit.id);
+        orderedIds.push(commit.id);
+        if (!firstUniqueCommitMarked) {
+          firstUniqueCommitMarked = true;
+        }
+      }
+
+      const existing = byId.get(commit.id);
+      if (!existing) {
+        byId.set(commit.id, commitWithSliceMeta);
+        return;
+      }
+
+      byId.set(commit.id, {
+        ...existing,
+        ...commitWithSliceMeta,
+        branch: existing.branch || commit.branch,
+        committedAt: existing.committedAt || commitWithSliceMeta.committedAt,
+        message: existing.message || commit.message,
+        parents: mergeUnique(existing.parents, commit.parents) ?? [],
+        branches: mergeUnique(existing.branches ?? [existing.branch], commit.branches ?? [commit.branch]),
+        tags: mergeUnique(existing.tags, commit.tags),
+        secondParentBranches: mergeUnique(existing.secondParentBranches, commit.secondParentBranches),
+        hiddenMergeBranches: mergeUnique(existing.hiddenMergeBranches, commit.hiddenMergeBranches),
+        sliceBreakBefore: existing.sliceBreakBefore || commitWithSliceMeta.sliceBreakBefore,
+        sliceLabel: existing.sliceLabel || commitWithSliceMeta.sliceLabel,
+        hiddenParentCount: Math.max(existing.hiddenParentCount ?? 0, commit.hiddenParentCount ?? 0),
+        hiddenChildCount: Math.max(existing.hiddenChildCount ?? 0, commit.hiddenChildCount ?? 0)
+      });
+    });
+  });
+
+  const commits = orderedIds
+    .map((id) => byId.get(id))
+    .filter((commit): commit is GraphCommit => Boolean(commit));
+  const branches = Array.from(new Set(commits.map((commit) => commit.branch)));
+  const head = models[0]?.head;
+  return { branches, commits, head };
 }
 
 function getPrimaryWorkspaceFolder(): vscode.WorkspaceFolder | undefined {

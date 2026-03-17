@@ -2,6 +2,8 @@ export type GraphCommit = {
   id: string;
   branch: string;
   committedAt?: string;
+  sliceBreakBefore?: boolean;
+  sliceLabel?: string;
   branches?: string[];
   hiddenMergeBranches?: string[];
   hiddenMergeParentId?: string;

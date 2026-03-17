@@ -18,6 +18,10 @@
         "title": "Git Slice: Open View"
       },
       {
+        "command": "gitSlice.addSlice",
+        "title": "Git Slice: Add Slice"
+      },
+      {
         "command": "gitSlice.showGitContext",
         "title": "Git Slice: Graph"
       }
