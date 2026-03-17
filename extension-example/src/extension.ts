@@ -7,7 +7,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const gitGraphPanel = new GitGraphPanel({
     panelId: 'extensionExample.gitGraph',
     title: 'Git Commit Graph',
-    branchLaneDistance: 100,
+    branchLaneDistance: 50,
     strokeWidth: 2.5,
     onCommitClick: (commitId, branch) => {
       void vscode.window.showInformationMessage(`Clicked ${commitId} on ${branch}`);

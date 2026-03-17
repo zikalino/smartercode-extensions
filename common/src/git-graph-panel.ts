@@ -51,7 +51,7 @@ export class GitGraphPanel implements vscode.Disposable {
 
   showLoading(initialFilter?: GitGraphFilter): void {
     const initialConfig = {
-      branchLaneDistance: this.options.branchLaneDistance ?? 120,
+      branchLaneDistance: this.options.branchLaneDistance ?? 60,
       commitVerticalDistance: this.options.commitVerticalDistance ?? 46,
       strokeWidth: this.options.strokeWidth ?? 2.2
     };
@@ -143,7 +143,7 @@ export class GitGraphPanel implements vscode.Disposable {
       : model;
 
     const initialConfig = {
-      branchLaneDistance: this.options.branchLaneDistance ?? 120,
+      branchLaneDistance: this.options.branchLaneDistance ?? 60,
       commitVerticalDistance: this.options.commitVerticalDistance ?? 46,
       strokeWidth: this.options.strokeWidth ?? 2.2
     };
@@ -1757,7 +1757,7 @@ export class GitGraphPanel implements vscode.Disposable {
       const branchHeads = getBranchHeads(model);
       const currentHeadId = getFallbackCurrentHeadId(model);
       // Match the advanced renderer's spacing model: lane/row distance come directly from config.
-      const lane = Math.max(10, Number(config?.branchLaneDistance ?? 100));
+      const lane = Math.max(10, Number(config?.branchLaneDistance ?? 50));
       const stepY = Math.max(10, Number(config?.commitVerticalDistance ?? 44));
       const offsetX = 36;
       const offsetY = 24;
@@ -2273,12 +2273,8 @@ export class GitGraphPanel implements vscode.Disposable {
       const totalHiddenChildren = entries
         .reduce((sum, entry) => sum + Number(entry.commit.hiddenChildCount || 0), 0);
 
-      const rangeParts = getCurrentRangePartsFromHeader();
-      const hasBoundedStart = rangeParts.start.length > 0;
-      const hasBoundedEnd = rangeParts.end.length > 0 && rangeParts.end.toUpperCase() !== 'HEAD';
-
-      const showParentsMarker = totalHiddenParents > 0 || hasBoundedStart;
-      const showChildrenMarker = totalHiddenChildren > 0 || hasBoundedEnd;
+      const showParentsMarker = totalHiddenParents > 0;
+      const showChildrenMarker = totalHiddenChildren > 0;
 
       if (showParentsMarker) {
         appendMarker(bottomEntry.commit, bottomEntry.node, 'parents', Math.max(1, totalHiddenParents));

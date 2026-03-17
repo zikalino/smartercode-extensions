@@ -781,12 +781,41 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
 }
 
 function filterModel(model: GraphModel, filter: GitGraphFilter): GraphModel {
+  let workingModel = model;
+
+  // Sample provider data does not naturally understand git rev ranges, so we
+  // map HEAD~N..HEAD to a deterministic "latest N commits" window.
+  if (filter.source === 'sample') {
+    const range = String(filter.commitRange ?? '').trim();
+    const headWindowMatch = range.match(/^HEAD~(\d+)\.\.HEAD$/i);
+    if (headWindowMatch) {
+      const depth = Number(headWindowMatch[1]);
+      if (Number.isFinite(depth) && depth > 0) {
+        const visibleCommits = workingModel.commits.slice(0, Math.min(workingModel.commits.length, depth));
+        const hiddenOlderCount = Math.max(0, workingModel.commits.length - visibleCommits.length);
+
+        if (hiddenOlderCount > 0 && visibleCommits.length > 0) {
+          const oldestVisibleIndex = visibleCommits.length - 1;
+          visibleCommits[oldestVisibleIndex] = {
+            ...visibleCommits[oldestVisibleIndex],
+            hiddenParentCount: (visibleCommits[oldestVisibleIndex].hiddenParentCount ?? 0) + hiddenOlderCount
+          };
+        }
+
+        workingModel = {
+          ...workingModel,
+          commits: visibleCommits
+        };
+      }
+    }
+  }
+
   if (filter.branches.length === 0) {
-    return model;
+    return workingModel;
   }
 
   const branchSet = new Set(filter.branches);
-  const commits = model.commits.filter((commit) => {
+  const commits = workingModel.commits.filter((commit) => {
     if (branchSet.has(commit.branch)) {
       return true;
     }
@@ -795,7 +824,7 @@ function filterModel(model: GraphModel, filter: GitGraphFilter): GraphModel {
     return memberships.some((branchName) => branchSet.has(branchName));
   });
   const ids = new Set(commits.map((commit) => commit.id));
-  const removedCommits = model.commits.filter((commit) => {
+  const removedCommits = workingModel.commits.filter((commit) => {
     if (branchSet.has(commit.branch)) {
       return false;
     }
@@ -833,7 +862,7 @@ function filterModel(model: GraphModel, filter: GitGraphFilter): GraphModel {
   }));
 
   if (normalizedCommits.length === 0) {
-    return model;
+    return workingModel;
   }
 
   return {

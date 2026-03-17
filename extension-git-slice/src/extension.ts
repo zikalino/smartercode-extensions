@@ -18,7 +18,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const panel = new GitGraphPanel({
     panelId: 'gitSlice.panel',
     title: 'Git Slice',
-    branchLaneDistance: 28,
+    branchLaneDistance: 14,
     commitVerticalDistance: 26,
     strokeWidth: 2.5,
     onCommitContextMenu: (commitId, branch, selectedCommitIds) => {

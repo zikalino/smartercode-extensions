@@ -669,7 +669,7 @@ export function activate(context: ExtensionContext): void {
   const gitGraphPanel = new GitGraphPanel({
     panelId: 'vscode-docker-runner.git-graph-viewer',
     title: 'Docker Runner Git Graph',
-    branchLaneDistance: 25,
+    branchLaneDistance: 12,
     commitVerticalDistance: 25,
     strokeWidth: 2.5,
     onCommitClick: (commitId, branch) => {
