@@ -431,7 +431,12 @@ export class GitDataProviderExample implements GitDataProvider {
       ]
     };
 
-    return filterModel(full, filter);
+    // Keep sample ordering aligned with `git log` output (newest first)
+    // so lane routing behaves the same as local/remote providers.
+    return filterModel({
+      ...full,
+      commits: [...full.commits].reverse()
+    }, filter);
   }
 }
 

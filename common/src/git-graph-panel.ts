@@ -2146,10 +2146,12 @@ export class GitGraphPanel implements vscode.Disposable {
         return 'M' + parent.x + ',' + parent.y + ' L' + child.x + ',' + child.y;
       }
 
-      const bend = Math.max(16, Math.abs(child.y - parent.y) * 0.55);
+      const deltaY = child.y - parent.y;
+      const direction = deltaY >= 0 ? 1 : -1;
+      const bend = Math.max(16, Math.abs(deltaY) * 0.45);
       return 'M' + parent.x + ',' + parent.y
-        + ' C' + parent.x + ',' + (parent.y + bend)
-        + ' ' + child.x + ',' + (child.y - bend)
+        + ' C' + parent.x + ',' + (parent.y + direction * bend)
+        + ' ' + child.x + ',' + (child.y - direction * bend)
         + ' ' + child.x + ',' + child.y;
     }
 
@@ -2949,7 +2951,7 @@ function shouldUseSampleModel(graphDefinition: string, model: GraphModel): boole
 }
 
 function createSampleGraphModel(): GraphModel {
-  return {
+  const model: GraphModel = {
     branches: ['main', 'feature/auth', 'release/1.1'],
     commits: [
       { id: 'A0', branch: 'main', parents: [] },
@@ -2960,6 +2962,11 @@ function createSampleGraphModel(): GraphModel {
       { id: 'R1', branch: 'release/1.1', parents: ['M1'] },
       { id: 'R2', branch: 'release/1.1', parents: ['R1'] }
     ]
+  };
+
+  return {
+    ...model,
+    commits: [...model.commits].reverse()
   };
 }
 
