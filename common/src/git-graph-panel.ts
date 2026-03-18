@@ -430,7 +430,7 @@ export class GitGraphPanel implements vscode.Disposable {
         color-mix(in srgb, var(--vscode-descriptionForeground) 75%, transparent) 1.1px,
         transparent 1.2px
       );
-      background-size: 8px 1px;
+      background-size: 3px 1px;
       background-repeat: repeat-x;
       pointer-events: none;
     }
@@ -662,7 +662,7 @@ export class GitGraphPanel implements vscode.Disposable {
       stroke: color-mix(in srgb, var(--vscode-descriptionForeground) 75%, transparent);
       stroke-width: 1.2;
       stroke-linecap: round;
-      stroke-dasharray: 1 6;
+      stroke-dasharray: 1 1;
     }
 
     #commitGraph .hidden-edge-connector {
