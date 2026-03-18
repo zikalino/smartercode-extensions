@@ -37,6 +37,7 @@ export function buildExtensionGreeting(name: string): string {
 }
 
 export * from './git-data-provider';
+export * from './git-command-service';
 export * from './git-graph-header';
 export * from './git-graph-panel';
 export * from './git-graph-types';

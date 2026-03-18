@@ -425,11 +425,13 @@ export class GitGraphPanel implements vscode.Disposable {
       top: 50%;
       height: 1px;
       transform: translateY(-0.5px);
-      background-image: repeating-linear-gradient(
-        to right,
-        color-mix(in srgb, var(--vscode-descriptionForeground) 75%, transparent) 0 8px,
-        transparent 8px 14px
+      background-image: radial-gradient(
+        circle,
+        color-mix(in srgb, var(--vscode-descriptionForeground) 75%, transparent) 1.1px,
+        transparent 1.2px
       );
+      background-size: 8px 1px;
+      background-repeat: repeat-x;
       pointer-events: none;
     }
 
@@ -659,7 +661,8 @@ export class GitGraphPanel implements vscode.Disposable {
       fill: none;
       stroke: color-mix(in srgb, var(--vscode-descriptionForeground) 75%, transparent);
       stroke-width: 1.2;
-      stroke-dasharray: 8 6;
+      stroke-linecap: round;
+      stroke-dasharray: 1 6;
     }
 
     #commitGraph .hidden-edge-connector {

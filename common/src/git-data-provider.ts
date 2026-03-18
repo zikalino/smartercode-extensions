@@ -894,9 +894,9 @@ function resolveSampleCommitWindow(
     return undefined;
   }
 
-  const olderDepth = parseSampleHeadDepth(parts[0]);
-  const newerDepth = parseSampleHeadDepth(parts[1]);
-  if (olderDepth === undefined || newerDepth === undefined) {
+  const olderDepth = parseSampleRangeBoundary(parts[0], commitCount);
+  const newerDepth = parseSampleRangeBoundary(parts[1], commitCount);
+  if (olderDepth === undefined || newerDepth === undefined || olderDepth <= newerDepth) {
     return undefined;
   }
 
@@ -909,17 +909,32 @@ function resolveSampleCommitWindow(
   return { startIndex, endExclusive };
 }
 
-function parseSampleHeadDepth(value: string): number | undefined {
+function parseSampleRangeBoundary(value: string, commitCount: number): number | undefined {
   const normalized = String(value || '').trim().toUpperCase();
   if (normalized === 'HEAD') {
     return 0;
   }
 
-  const match = normalized.match(/^HEAD~(\d+)$/);
-  if (!match) {
+  const headDepthMatch = normalized.match(/^HEAD~(\d+)$/);
+  if (headDepthMatch) {
+    const depth = Number(headDepthMatch[1]);
+    if (!Number.isFinite(depth) || depth < 0) {
+      return undefined;
+    }
+    return Math.min(commitCount, depth);
+  }
+
+  const sampleCommitMatch = normalized.match(/^S(\d+)(\^)?$/);
+  if (!sampleCommitMatch) {
     return undefined;
   }
 
-  const depth = Number(match[1]);
-  return Number.isFinite(depth) && depth >= 0 ? depth : undefined;
+  const commitNumber = Number(sampleCommitMatch[1]);
+  if (!Number.isFinite(commitNumber) || commitNumber <= 0) {
+    return undefined;
+  }
+
+  const baseDepth = Math.max(0, commitCount - commitNumber);
+  const adjustedDepth = sampleCommitMatch[2] ? baseDepth + 1 : baseDepth;
+  return Math.min(commitCount, adjustedDepth);
 }

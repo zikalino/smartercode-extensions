@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   buildGitGraphUri,
+  GitCommandService,
   GraphCommit,
   GraphModel,
   GitDataProvider,
@@ -15,13 +16,19 @@ import {
 const OPEN_VIEW_COMMAND = 'gitSlice.openView';
 const SHOW_CONTEXT_COMMAND = 'gitSlice.showGitContext';
 const ADD_SLICE_COMMAND = 'gitSlice.addSlice';
+const SAMPLE_COMMIT_COUNT = 1000;
 
 let currentRepoPath: string | undefined;
 let activeSlices: Array<{ filter: GitGraphFilter; model: GraphModel }> = [];
+let currentPanel: GitGraphPanel | undefined;
+let currentLocalProvider: LocalGitDataProvider | undefined;
+let currentSampleProvider: GitDataProviderExample | undefined;
+let currentGitCommandService: GitCommandService | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   const localProvider = new LocalGitDataProvider();
   const sampleProvider = new GitDataProviderExample();
+  const gitCommandService = new GitCommandService();
   const panel = new GitGraphPanel({
     panelId: 'gitSlice.panel',
     title: 'Git Slice',
@@ -38,13 +45,13 @@ export function activate(context: vscode.ExtensionContext): void {
       void handleSliceDividerAction(action, range, panel, localProvider, sampleProvider);
     },
     onCommitContextMenu: (commitId, branch, selectedCommitIds) => {
-      if (!currentRepoPath) {
-        void vscode.window.showWarningMessage('Git Slice: no repository path available.');
-        return;
-      }
       void showCommitContextMenu(commitId, branch, selectedCommitIds, currentRepoPath);
     }
   });
+  currentPanel = panel;
+  currentLocalProvider = localProvider;
+  currentSampleProvider = sampleProvider;
+  currentGitCommandService = gitCommandService;
 
   const openWorkspaceDisposable = vscode.commands.registerCommand(OPEN_VIEW_COMMAND, async () => {
     const workspaceFolder = getPrimaryWorkspaceFolder();
@@ -537,29 +544,58 @@ function toWorkspaceRelativePath(folder: vscode.WorkspaceFolder, fileUri: vscode
   return relativePath.replace(/\\/g, '/');
 }
 
-type CommitAction = 'tag' | 'branch' | 'checkout' | 'cherry-pick' | 'patch' | 'revert' | 'squash' | 'cumulative-patch';
+type CommitAction = 'tag' | 'branch' | 'checkout' | 'cherry-pick' | 'patch' | 'revert' | 'squash' | 'cumulative-patch' | 'slice-before' | 'slice-after' | 'change-message';
 
 async function showCommitContextMenu(
   commitId: string,
   branch: string,
   selectedCommitIds: string[],
-  repoPath: string
+  repoPath: string | undefined
 ): Promise<void> {
   const isMulti = selectedCommitIds.length > 1;
+  const context = resolveCommitActionContext(isMulti ? selectedCommitIds : [commitId], repoPath);
+  const canRunLocalGitOperations = Boolean(context.repoPath);
+  const canChangeMessage = canRunLocalGitOperations || context.source === 'sample';
+
+  if (!canRunLocalGitOperations && isMulti) {
+    void vscode.window.showWarningMessage('Git Slice: multi-commit operations are available only for local repository slices.');
+    return;
+  }
 
   const items: Array<{ label: string; description?: string; action: CommitAction }> = isMulti
     ? [
         { label: '$(file-code) Extract Cumulative Patch', description: `${selectedCommitIds.length} commits as one diff`, action: 'cumulative-patch' },
         { label: '$(git-merge) Squash Commits', description: `${selectedCommitIds.length} commits → 1`, action: 'squash' }
       ]
-    : [
-        { label: '$(tag) Add Tag', action: 'tag' },
-        { label: '$(git-branch) Add Branch', action: 'branch' },
-        { label: '$(check) Checkout', action: 'checkout' },
-        { label: '$(copy) Cherry Pick', action: 'cherry-pick' },
-        { label: '$(file-code) Extract Patch', action: 'patch' },
-        { label: '$(discard) Revert', action: 'revert' }
-      ];
+    : (() => {
+        const singleItems: Array<{ label: string; description?: string; action: CommitAction }> = [
+          { label: '$(split-horizontal) Slice Before', description: 'Split current slice before this commit', action: 'slice-before' },
+          { label: '$(split-horizontal) Slice After', description: 'Split current slice after this commit', action: 'slice-after' }
+        ];
+
+        if (canChangeMessage) {
+          singleItems.push(
+            {
+              label: '$(edit) Change Commit Message',
+              description: context.source === 'sample' ? 'Simulate message rewrite in sample data' : 'Rewrite this commit message',
+              action: 'change-message'
+            }
+          );
+        }
+
+        if (canRunLocalGitOperations) {
+          singleItems.push(
+            { label: '$(tag) Add Tag', action: 'tag' },
+            { label: '$(git-branch) Add Branch', action: 'branch' },
+            { label: '$(check) Checkout', action: 'checkout' },
+            { label: '$(copy) Cherry Pick', action: 'cherry-pick' },
+            { label: '$(file-code) Extract Patch', action: 'patch' },
+            { label: '$(discard) Revert', action: 'revert' }
+          );
+        }
+
+        return singleItems;
+      })();
 
   const picked = await vscode.window.showQuickPick(items, {
     title: isMulti
@@ -573,58 +609,125 @@ async function showCommitContextMenu(
   }
 
   try {
-    await executeCommitAction(picked.action, commitId, selectedCommitIds, repoPath);
+    await executeCommitAction(picked.action, commitId, selectedCommitIds, context.repoPath, context.source);
   } catch (error) {
     const details = error instanceof Error ? error.message : String(error);
     void vscode.window.showErrorMessage(`Git Slice: operation failed. ${details}`);
   }
 }
 
+function resolveCommitActionContext(
+  commitIds: string[],
+  fallbackRepoPath: string | undefined
+): { source: 'local' | 'remote' | 'sample' | 'mixed' | 'unknown'; repoPath?: string } {
+  const sliceEntries = commitIds
+    .map((id) => activeSlices.find((entry) => entry.model.commits.some((commit) => commit.id === id)))
+    .filter((entry): entry is { filter: GitGraphFilter; model: GraphModel } => Boolean(entry));
+
+  if (sliceEntries.length === 0) {
+    return fallbackRepoPath ? { source: 'unknown', repoPath: fallbackRepoPath } : { source: 'unknown' };
+  }
+
+  const sources = Array.from(new Set(sliceEntries.map((entry) => entry.filter.source)));
+  if (sources.length !== 1) {
+    return { source: 'mixed' };
+  }
+
+  const source = sources[0];
+  if (source !== 'local') {
+    return { source };
+  }
+
+  const repoPath = sliceEntries.find((entry) => Boolean(entry.filter.localPath))?.filter.localPath ?? fallbackRepoPath;
+  return repoPath ? { source: 'local', repoPath } : { source: 'local' };
+}
+
 async function executeCommitAction(
   action: CommitAction,
   commitId: string,
   selectedCommitIds: string[],
-  repoPath: string
+  repoPath: string | undefined,
+  source: 'local' | 'remote' | 'sample' | 'mixed' | 'unknown'
 ): Promise<void> {
+  const gitCommandService = requireGitCommandService();
+
   switch (action) {
+    case 'slice-before': {
+      await splitSliceAtCommit(commitId, 'before');
+      break;
+    }
+
+    case 'slice-after': {
+      await splitSliceAtCommit(commitId, 'after');
+      break;
+    }
+
+    case 'change-message': {
+      if (source === 'sample') {
+        await rewriteSampleCommitMessage(commitId);
+        break;
+      }
+
+      if (!repoPath) {
+        throw new Error('Changing commit message is only available for local repository slices.');
+      }
+      await rewriteCommitMessage(repoPath, commitId);
+      break;
+    }
+
     case 'tag': {
+      if (!repoPath) {
+        throw new Error('Tag action is only available for local repository slices.');
+      }
       const name = await vscode.window.showInputBox({
         title: 'New tag',
         prompt: `Tag name for commit ${commitId}`,
         validateInput: (v) => v.trim().length === 0 ? 'Tag name cannot be empty.' : undefined
       });
       if (!name) { return; }
-      await runGitInRepo(repoPath, ['tag', name.trim(), commitId]);
+      await gitCommandService.createTag(repoPath, commitId, name.trim());
       void vscode.window.showInformationMessage(`Git Slice: tag '${name.trim()}' created at ${commitId}.`);
       break;
     }
 
     case 'branch': {
+      if (!repoPath) {
+        throw new Error('Branch action is only available for local repository slices.');
+      }
       const name = await vscode.window.showInputBox({
         title: 'New branch',
         prompt: `Branch name from commit ${commitId}`,
         validateInput: (v) => v.trim().length === 0 ? 'Branch name cannot be empty.' : undefined
       });
       if (!name) { return; }
-      await runGitInRepo(repoPath, ['branch', name.trim(), commitId]);
+      await gitCommandService.createBranch(repoPath, commitId, name.trim());
       void vscode.window.showInformationMessage(`Git Slice: branch '${name.trim()}' created at ${commitId}.`);
       break;
     }
 
     case 'checkout': {
-      await runGitInRepo(repoPath, ['checkout', commitId]);
+      if (!repoPath) {
+        throw new Error('Checkout action is only available for local repository slices.');
+      }
+      await gitCommandService.checkoutCommit(repoPath, commitId);
       void vscode.window.showInformationMessage(`Git Slice: checked out ${commitId}.`);
       break;
     }
 
     case 'cherry-pick': {
-      await runGitInRepo(repoPath, ['cherry-pick', commitId]);
+      if (!repoPath) {
+        throw new Error('Cherry-pick action is only available for local repository slices.');
+      }
+      await gitCommandService.cherryPickCommit(repoPath, commitId);
       void vscode.window.showInformationMessage(`Git Slice: cherry-picked ${commitId} onto current branch.`);
       break;
     }
 
     case 'patch': {
-      const patchContent = await runGitInRepo(repoPath, ['format-patch', '-1', commitId, '--stdout']);
+      if (!repoPath) {
+        throw new Error('Patch extraction is only available for local repository slices.');
+      }
+      const patchContent = await gitCommandService.extractPatch(repoPath, commitId);
       const defaultUri = vscode.Uri.file(path.join(repoPath, `${commitId}.patch`));
       const saveUri = await vscode.window.showSaveDialog({
         defaultUri,
@@ -637,18 +740,24 @@ async function executeCommitAction(
     }
 
     case 'revert': {
+      if (!repoPath) {
+        throw new Error('Revert action is only available for local repository slices.');
+      }
       const confirmed = await vscode.window.showWarningMessage(
         `Revert commit ${commitId}? A new revert commit will be created.`,
         { modal: true },
         'Revert'
       );
       if (confirmed !== 'Revert') { return; }
-      await runGitInRepo(repoPath, ['revert', '--no-edit', commitId]);
+      await gitCommandService.revertCommit(repoPath, commitId);
       void vscode.window.showInformationMessage(`Git Slice: reverted ${commitId}.`);
       break;
     }
 
     case 'squash': {
+      if (!repoPath) {
+        throw new Error('Squash action is only available for local repository slices.');
+      }
       const message = await vscode.window.showInputBox({
         title: 'Squash commits',
         prompt: `Commit message for the squashed commit (${selectedCommitIds.length} commits)`,
@@ -661,71 +770,201 @@ async function executeCommitAction(
         'Squash'
       );
       if (confirmed !== 'Squash') { return; }
-      await squashCommits(repoPath, selectedCommitIds, message.trim());
+      await gitCommandService.squashCommits(repoPath, selectedCommitIds, message.trim());
       void vscode.window.showInformationMessage(`Git Slice: squashed ${selectedCommitIds.length} commits.`);
       break;
     }
 
     case 'cumulative-patch': {
-      const { newestSha, oldestSha, parentSha } = await resolveSelectedCommitBounds(repoPath, selectedCommitIds);
-      const patchContent = await runGitInRepo(repoPath, [
-        'diff',
-        '--binary',
-        '--full-index',
-        `${parentSha}..${newestSha}`
-      ]);
+      if (!repoPath) {
+        throw new Error('Cumulative patch extraction is only available for local repository slices.');
+      }
+      const result = await gitCommandService.extractCumulativePatch(repoPath, selectedCommitIds);
 
-      const defaultUri = vscode.Uri.file(path.join(repoPath, `${oldestSha}-${newestSha}.patch`));
+      const defaultUri = vscode.Uri.file(path.join(repoPath, `${result.oldestSha}-${result.newestSha}.patch`));
       const saveUri = await vscode.window.showSaveDialog({
         defaultUri,
         filters: { 'Patch files': ['patch', 'diff'], 'All files': ['*'] }
       });
       if (!saveUri) { return; }
 
-      await vscode.workspace.fs.writeFile(saveUri, Buffer.from(patchContent, 'utf8'));
+      await vscode.workspace.fs.writeFile(saveUri, Buffer.from(result.content, 'utf8'));
       void vscode.window.showInformationMessage(`Git Slice: cumulative patch saved to ${saveUri.fsPath}.`);
       break;
     }
   }
 }
 
-async function resolveSelectedCommitBounds(
-  repoPath: string,
-  selectedCommitIds: string[]
-): Promise<{ newestSha: string; oldestSha: string; parentSha: string }> {
-  // List only selected commits sorted by commit date (newest first) without ancestry traversal.
-  const logOutput = await runGitInRepo(repoPath, [
-    'log', '--no-walk=sorted', '--format=%H', ...selectedCommitIds
-  ]);
-  const orderedShas = logOutput.trim().split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-  if (orderedShas.length === 0) {
-    throw new Error('Could not resolve the selected commits.');
+function requireGitCommandService(): GitCommandService {
+  if (!currentGitCommandService) {
+    throw new Error('Git command service is not initialized.');
+  }
+  return currentGitCommandService;
+}
+
+async function splitSliceAtCommit(commitId: string, mode: 'before' | 'after'): Promise<void> {
+  if (!currentPanel || !currentLocalProvider || !currentSampleProvider) {
+    throw new Error('Git Slice is not initialized.');
   }
 
-  const newestSha = orderedShas[0];
-  const oldestSha = orderedShas[orderedShas.length - 1];
-  const parentSha = (await runGitInRepo(repoPath, ['rev-parse', `${oldestSha}^`])).trim();
-  return { newestSha, oldestSha, parentSha };
+  const sliceIndex = activeSlices.findIndex((entry) => entry.model.commits.some((commit) => commit.id === commitId));
+  if (sliceIndex < 0) {
+    throw new Error('Selected commit is not part of an active slice.');
+  }
+
+  const sliceEntry = activeSlices[sliceIndex];
+  const commits = sliceEntry.model.commits;
+  const pivotIndex = commits.findIndex((commit) => commit.id === commitId);
+  if (pivotIndex < 0) {
+    throw new Error('Selected commit is not part of the current slice model.');
+  }
+
+  const firstCommits = mode === 'before'
+    ? commits.slice(0, pivotIndex)
+    : commits.slice(0, pivotIndex + 1);
+  const secondCommits = mode === 'before'
+    ? commits.slice(pivotIndex)
+    : commits.slice(pivotIndex + 1);
+
+  const firstRange = buildCommitRangeFromCommitIds(firstCommits);
+  const secondRange = buildCommitRangeFromCommitIds(secondCommits);
+  if (!firstRange || !secondRange) {
+    throw new Error('Split would produce an empty slice. Pick another commit boundary.');
+  }
+
+  const provider: GitDataProvider = sliceEntry.filter.source === 'sample' ? currentSampleProvider : currentLocalProvider;
+  const firstFilter: GitGraphFilter = { ...sliceEntry.filter, commitRange: firstRange, commitRanges: [firstRange] };
+  firstFilter.uri = buildGitGraphUri(firstFilter);
+  const secondFilter: GitGraphFilter = { ...sliceEntry.filter, commitRange: secondRange, commitRanges: [secondRange] };
+  secondFilter.uri = buildGitGraphUri(secondFilter);
+
+  const firstModel = await provider.getGraphSlice(firstFilter);
+  const secondModel = await provider.getGraphSlice(secondFilter);
+
+  activeSlices.splice(sliceIndex, 1, { filter: firstFilter, model: firstModel }, { filter: secondFilter, model: secondModel });
+  renderActiveSlices(currentPanel);
+  void vscode.window.showInformationMessage(`Git Slice: split slice into ${firstRange} and ${secondRange}.`);
 }
 
-async function squashCommits(
-  repoPath: string,
-  selectedCommitIds: string[],
-  message: string
-): Promise<void> {
-  const { parentSha } = await resolveSelectedCommitBounds(repoPath, selectedCommitIds);
-  await runGitInRepo(repoPath, ['reset', '--soft', parentSha]);
-  await runGitInRepo(repoPath, ['commit', '-m', message]);
+function buildCommitRangeFromCommitIds(commits: GraphCommit[]): string | undefined {
+  if (commits.length === 0) {
+    return undefined;
+  }
+
+  const newest = String(commits[0]?.id || '').trim();
+  const oldest = commits[commits.length - 1];
+  const oldestId = String(oldest?.id || '').trim();
+  if (!newest || !oldestId) {
+    return undefined;
+  }
+
+  const oldestHasNoParents = (oldest.parents?.length ?? 0) === 0 && (oldest.hiddenParentCount ?? 0) === 0;
+  if (oldestHasNoParents) {
+    return newest;
+  }
+
+  return `${oldestId}^..${newest}`;
 }
 
-function runGitInRepo(cwd: string, args: string[]): Promise<string> {
+async function rewriteCommitMessage(repoPath: string, commitId: string): Promise<void> {
+  const gitCommandService = requireGitCommandService();
+
+  const newMessage = await vscode.window.showInputBox({
+    title: 'Change Commit Message',
+    prompt: `New message for ${commitId}`,
+    validateInput: (value) => String(value || '').trim().length === 0 ? 'Commit message cannot be empty.' : undefined
+  });
+  if (!newMessage) {
+    return;
+  }
+
+  const confirmed = await vscode.window.showWarningMessage(
+    'Changing a commit message rewrites history and changes commit SHAs. Continue?',
+    { modal: true },
+    'Rewrite'
+  );
+  if (confirmed !== 'Rewrite') {
+    return;
+  }
+
+  const result = await gitCommandService.rewriteCommitMessage(repoPath, commitId, newMessage.trim());
+  if (result.mode === 'amend-head') {
+    void vscode.window.showInformationMessage('Git Slice: amended latest commit message.');
+    return;
+  }
+
+  void vscode.window.showInformationMessage('Git Slice: commit message rewritten. You may need to force-push updated history.');
+}
+
+async function rewriteSampleCommitMessage(commitId: string): Promise<void> {
+  if (!currentPanel) {
+    throw new Error('Git Slice panel is not initialized.');
+  }
+
+  const newMessage = await vscode.window.showInputBox({
+    title: 'Change Sample Commit Message',
+    prompt: `New message for ${commitId}`,
+    validateInput: (value) => String(value || '').trim().length === 0 ? 'Commit message cannot be empty.' : undefined
+  });
+  if (!newMessage) {
+    return;
+  }
+
+  const updatedMessage = newMessage.trim();
+  let updated = false;
+
+  activeSlices = activeSlices.map((entry) => {
+    if (entry.filter.source !== 'sample') {
+      return entry;
+    }
+
+    let entryUpdated = false;
+    const commits = entry.model.commits.map((commit) => {
+      if (commit.id !== commitId) {
+        return commit;
+      }
+
+      entryUpdated = true;
+      updated = true;
+      return { ...commit, message: updatedMessage };
+    });
+
+    if (!entryUpdated) {
+      return entry;
+    }
+
+    return {
+      ...entry,
+      model: {
+        ...entry.model,
+        commits
+      }
+    };
+  });
+
+  if (!updated) {
+    throw new Error('Selected sample commit was not found in active slices.');
+  }
+
+  renderActiveSlices(currentPanel);
+  void vscode.window.showInformationMessage('Git Slice: sample commit message updated (simulated).');
+}
+function runGitInRepo(cwd: string, args: string[], extraEnv?: Record<string, string>): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile('git', ['-C', cwd, ...args], { encoding: 'utf8' }, (error, stdout, stderr) => {
+    execFile(
+      'git',
+      ['-C', cwd, ...args],
+      {
+        encoding: 'utf8',
+        env: extraEnv ? { ...process.env, ...extraEnv } : process.env
+      },
+      (error, stdout, stderr) => {
       if (error) {
         reject(new Error((stderr || error.message).trim()));
         return;
       }
       resolve(stdout);
-    });
+      }
+    );
   });
 }
