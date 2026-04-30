@@ -1,0 +1,46 @@
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro
+    depends_on:
+      - game
+      - portal
+    restart: always
+
+  game:
+    image: ${GAME_IMAGE:-game:latest}
+    expose:
+      - "3000"
+    restart: always
+
+  portal:
+    image: ${PORTAL_IMAGE:-portal:latest}
+    expose:
+      - "8080"
+    restart: always
+
+  certbot:
+    image: certbot/certbot
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt
+      - /var/www/certbot:/var/www/certbot
+    # Obtain the initial certificate on first run, then renew every 12 hours.
+    # Let's Encrypt certificates expire after 90 days; certbot renew is a no-op
+    # when the certificate is not yet due for renewal (< 30 days to expiry).
+    entrypoint: >
+      sh -c "certbot certonly --webroot
+        --webroot-path=/var/www/certbot
+        --email admin@smartercode.eu
+        --agree-tos
+        --no-eff-email
+        --keep-until-expiring
+        -d smartercode.eu
+        -d www.smartercode.eu
+        && while :; do sleep 12h; certbot renew --webroot
+          --webroot-path=/var/www/certbot --quiet; done"
