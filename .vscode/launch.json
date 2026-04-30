@@ -39,6 +39,32 @@
         "${workspaceFolder}/extension-git-slice/out/**/*.js"
       ],
       "preLaunchTask": "npm: watch"
+    },
+    {
+      "name": "Run Monster Gene Lab Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/extension-monster-gene-lab"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/extension-monster-gene-lab/out/**/*.js"
+      ],
+      "preLaunchTask": "npm: watch"
+    },
+    {
+      "name": "Run City Route Map Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/extension-city-route-map"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/extension-city-route-map/out/**/*.js"
+      ],
+      "preLaunchTask": "npm: watch"
     }
   ]
 }

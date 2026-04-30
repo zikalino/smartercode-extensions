@@ -5,7 +5,9 @@
     "common",
     "extension-example",
     "extension-docker-runner",
-    "extension-git-slice"
+    "extension-git-slice",
+    "extension-monster-gene-lab",
+    "extension-city-route-map"
   ],
   "scripts": {
     "compile": "tsc -b",

@@ -1,0 +1,29 @@
+{
+  "name": "extension-monster-gene-lab",
+  "displayName": "Monster Gene Lab",
+  "description": "Prototype game engine playground for breeding procedural monsters from genes.",
+  "version": "0.0.1",
+  "publisher": "local-dev",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "monsterGeneLab.open",
+        "title": "Monster Gene Lab: Open Prototype"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -b",
+    "watch": "tsc -b -w"
+  },
+  "dependencies": {
+    "@upcloud/common": "0.0.1"
+  }
+}

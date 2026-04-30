@@ -16,6 +16,12 @@
     },
     {
       "path": "./extension-git-slice"
+    },
+    {
+      "path": "./extension-monster-gene-lab"
+    },
+    {
+      "path": "./extension-city-route-map"
     }
   ]
 }

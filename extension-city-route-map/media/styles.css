@@ -1,0 +1,109 @@
+:root {
+  --bg: #f1f5f9;
+  --panel: #ffffff;
+  --ink: #0f172a;
+  --muted: #475569;
+  --line: #3b82f6;
+  --line-soft: rgba(59, 130, 246, 0.2);
+  --accent: #0ea5e9;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 20% 0%, rgba(14, 165, 233, 0.16), transparent 30%),
+    radial-gradient(circle at 100% 100%, rgba(59, 130, 246, 0.18), transparent 35%),
+    var(--bg);
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) 1fr;
+  min-height: 100vh;
+}
+
+.controls {
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.86);
+  border-right: 1px solid rgba(148, 163, 184, 0.4);
+  backdrop-filter: blur(8px);
+}
+
+.controls h1 {
+  margin: 0 0 8px;
+  font-size: 1.1rem;
+}
+
+.controls p {
+  margin: 0 0 14px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+#cityInput {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  border: 1px solid rgba(148, 163, 184, 0.75);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--ink);
+  padding: 10px 12px;
+  font: inherit;
+}
+
+#drawRoute {
+  margin-top: 10px;
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--line), var(--accent));
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#drawRoute:hover {
+  filter: brightness(1.06);
+}
+
+#status {
+  margin-top: 10px;
+  min-height: 20px;
+  color: var(--muted);
+}
+
+#results {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  color: var(--ink);
+}
+
+.map-wrap {
+  padding: 14px;
+}
+
+#map {
+  width: 100%;
+  height: calc(100vh - 28px);
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  box-shadow: 0 20px 60px var(--line-soft);
+}
+
+@media (max-width: 860px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  #map {
+    height: 58vh;
+  }
+}

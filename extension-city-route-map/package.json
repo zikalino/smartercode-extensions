@@ -1,0 +1,27 @@
+{
+  "name": "extension-city-route-map",
+  "displayName": "City Route Map",
+  "description": "Draw map routes by entering city names.",
+  "version": "0.0.1",
+  "publisher": "local-dev",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cityRouteMap.openPlanner",
+        "title": "City Route Map: Open Planner",
+        "category": "City Route Map"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -b",
+    "watch": "tsc -b -w"
+  }
+}

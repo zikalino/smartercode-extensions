@@ -1,0 +1,155 @@
+name: Release Extension
+
+on:
+  workflow_dispatch:
+    inputs:
+      extension:
+        description: Extension workspace to release
+        required: true
+        type: choice
+        options:
+          - extension-docker-runner
+          - extension-example
+          - extension-git-slice
+          - extension-monster-gene-lab
+          - extension-city-route-map
+      target:
+        description: Marketplace target
+        required: true
+        default: vscode-marketplace
+        type: choice
+        options:
+          - vscode-marketplace
+          - open-vsx
+          - both
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Read selected extension metadata
+        id: extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          extension_dir="${{ github.event.inputs.extension }}"
+          package_json="${extension_dir}/package.json"
+
+          if [[ ! -f "$package_json" ]]; then
+            echo "Selected extension manifest not found: $package_json" >&2
+            exit 1
+          fi
+
+          node - <<'EOF' "$extension_dir" "$GITHUB_OUTPUT"
+          const fs = require('node:fs');
+          const path = require('node:path');
+
+          const extensionDir = process.argv[2];
+          const outputPath = process.argv[3];
+          const packageJsonPath = path.join(extensionDir, 'package.json');
+          const manifest = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+
+          const publisher = String(manifest.publisher || '').trim();
+          if (!publisher) {
+            throw new Error(`Missing publisher in ${packageJsonPath}`);
+          }
+          if (publisher === 'local-dev') {
+            throw new Error(
+              `The selected extension still uses publisher \"local-dev\" in ${packageJsonPath}. Update the manifest to a real publisher before releasing.`
+            );
+          }
+
+          const version = String(manifest.version || '').trim();
+          if (!version) {
+            throw new Error(`Missing version in ${packageJsonPath}`);
+          }
+
+          const name = String(manifest.name || '').trim();
+          if (!name) {
+            throw new Error(`Missing name in ${packageJsonPath}`);
+          }
+
+          const lines = [
+            `dir=${extensionDir}`,
+            `name=${name}`,
+            `version=${version}`,
+            `publisher=${publisher}`,
+            `vsix=${name}-${version}.vsix`
+          ];
+          fs.appendFileSync(outputPath, `${lines.join('\n')}\n`);
+          EOF
+
+      - name: Create artifacts directory
+        run: mkdir -p artifacts
+
+      - name: Validate release secrets
+        env:
+          RELEASE_TARGET: ${{ github.event.inputs.target }}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          OPEN_VSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$RELEASE_TARGET" in
+            vscode-marketplace)
+              [[ -n "${VSCE_PAT}" ]] || { echo "Missing required secret: VSCE_PAT" >&2; exit 1; }
+              ;;
+            open-vsx)
+              [[ -n "${OPEN_VSX_TOKEN}" ]] || { echo "Missing required secret: OPEN_VSX_TOKEN" >&2; exit 1; }
+              ;;
+            both)
+              [[ -n "${VSCE_PAT}" ]] || { echo "Missing required secret: VSCE_PAT" >&2; exit 1; }
+              [[ -n "${OPEN_VSX_TOKEN}" ]] || { echo "Missing required secret: OPEN_VSX_TOKEN" >&2; exit 1; }
+              ;;
+            *)
+              echo "Unsupported release target: $RELEASE_TARGET" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Compile workspace
+        run: npm run compile
+
+      - name: Build Mermaid bundle for Docker Runner
+        if: ${{ steps.extension.outputs.dir == 'extension-docker-runner' }}
+        run: npm --workspace extension-docker-runner run build:mermaid
+
+      - name: Package selected extension
+        working-directory: ${{ steps.extension.outputs.dir }}
+        run: npx @vscode/vsce@latest package --out ../artifacts/${{ steps.extension.outputs.vsix }}
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.extension.outputs.name }}-${{ steps.extension.outputs.version }}
+          path: artifacts/${{ steps.extension.outputs.vsix }}
+
+      - name: Publish to VS Code Marketplace
+        if: ${{ github.event.inputs.target == 'vscode-marketplace' || github.event.inputs.target == 'both' }}
+        working-directory: ${{ steps.extension.outputs.dir }}
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx @vscode/vsce@latest publish --packagePath ../artifacts/${{ steps.extension.outputs.vsix }} --pat "$VSCE_PAT"
+
+      - name: Publish to Open VSX
+        if: ${{ github.event.inputs.target == 'open-vsx' || github.event.inputs.target == 'both' }}
+        env:
+          OPEN_VSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
+        run: npx ovsx@latest publish artifacts/${{ steps.extension.outputs.vsix }} -p "$OPEN_VSX_TOKEN"
