@@ -35,6 +35,7 @@ export interface WorkflowTextEntryStepOptions {
   title: string;
   placeHolder?: string;
   prompt?: string;
+  prefix?: string;
   value?: string;
   valueFromVariable?: string;
   storeAs: string;
@@ -93,6 +94,7 @@ export interface WorkflowDynamicComboSelectionStepOptions {
 export interface WorkflowInputProvider {
   initialize?(plan: WorkflowExecutionPlan): Promise<void> | void;
   onStepStarted?(plan: WorkflowExecutionPlan, stepIndex: number): Promise<void> | void;
+  onStepProgress?(plan: WorkflowExecutionPlan, stepIndex: number): Promise<void> | void;
   onStepFinished?(plan: WorkflowExecutionPlan, stepIndex: number): Promise<void> | void;
   complete?(plan: WorkflowExecutionPlan): Promise<void> | void;
   useMarkdownSnapshots?(): boolean;
@@ -189,7 +191,6 @@ class VsCodeWorkflowInputProvider implements WorkflowInputProvider {
   }
 
   async dynamicComboSelection(options: WorkflowDynamicComboSelectionStepOptions, context: WorkflowExecutionContext): Promise<string | null> {
-    // Fallback: show a quick pick with initial items
     const initialItems = await options.queryProvider('', context);
     const selected = await vscode.window.showQuickPick(initialItems, {
       title: context.resolveTemplate(options.title),
@@ -221,6 +222,15 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
     this.plan = plan;
     this.activeStepIndex = stepIndex;
     this.inputPayload = null;
+    if (this.panel) {
+      this.panel.title = plan.name;
+    }
+    this.render();
+  }
+
+  public onStepProgress(plan: WorkflowExecutionPlan, stepIndex: number): void {
+    this.plan = plan;
+    this.activeStepIndex = stepIndex;
     if (this.panel) {
       this.panel.title = plan.name;
     }
@@ -281,6 +291,7 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
       description: options.description,
       placeHolder: options.placeHolder ? context.resolveTemplate(options.placeHolder) : '',
       prompt: options.prompt ? context.resolveTemplate(options.prompt) : '',
+      prefix: options.prefix ?? '',
       value: context.resolveTemplate(initialValue),
       required: !!options.required
     }) as { cancelled?: boolean; value?: string } | undefined;
@@ -363,10 +374,9 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
   async dynamicComboSelection(options: WorkflowDynamicComboSelectionStepOptions, context: WorkflowExecutionContext): Promise<string | null> {
     this.currentQueryProvider = options.queryProvider;
     this.currentQueryContext = context;
-    
-    // Get initial results
+
     const initialResults = await options.queryProvider('', context);
-    
+
     const response = await this.prompt({
       type: 'dynamic-combo',
       title: context.resolveTemplate(options.title),
@@ -584,7 +594,10 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
       actions.className = 'actions';
       const ok = document.createElement('button');
       ok.textContent = 'Continue';
+      const cancel = document.createElement('button');
+      cancel.textContent = 'Cancel';
       actions.appendChild(ok);
+      actions.appendChild(cancel);
       inputRoot.appendChild(actions);
 
       if (payload.type === 'confirm') {
@@ -592,6 +605,7 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
         message.textContent = payload.message || '';
         content.appendChild(message);
         ok.textContent = payload.confirmLabel || 'Continue';
+        cancel.textContent = payload.cancelLabel || 'Cancel';
         ok.onclick = () => vscode.postMessage({ type: 'submit', payload: { confirmed: true } });
       }
 
@@ -600,7 +614,19 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
         input.type = 'text';
         input.placeholder = payload.placeHolder || '';
         input.value = payload.value || '';
-        content.appendChild(input);
+        if (payload.prefix) {
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;align-items:center;gap:4px;';
+          const pfx = document.createElement('span');
+          pfx.textContent = payload.prefix;
+          pfx.style.cssText = 'white-space:nowrap;font-weight:600;';
+          input.style.flex = '1';
+          row.appendChild(pfx);
+          row.appendChild(input);
+          content.appendChild(row);
+        } else {
+          content.appendChild(input);
+        }
         if (payload.prompt) {
           const p = document.createElement('p');
           p.textContent = payload.prompt;
@@ -810,6 +836,7 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
         };
       }
 
+      cancel.onclick = () => vscode.postMessage({ type: 'cancel' });
     }
   </script>
 </body>
@@ -818,8 +845,37 @@ export class WebviewWorkflowInputProvider implements WorkflowInputProvider {
 }
 
 export class WorkflowExecutionContext {
+  private activeStepIndex = -1;
+
   constructor(private readonly plan: WorkflowExecutionPlan,
               private readonly inputProvider: WorkflowInputProvider) {}
+
+  public setActiveStepIndex(stepIndex: number): void {
+    this.activeStepIndex = stepIndex;
+  }
+
+  public async reportProgress(lines: string | string[]): Promise<void> {
+    if (this.activeStepIndex < 0) {
+      return;
+    }
+
+    const step = this.plan.getSteps()[this.activeStepIndex];
+    if (!step) {
+      return;
+    }
+
+    const payload = Array.isArray(lines) ? lines : [lines];
+    const normalized = payload
+      .map(line => String(line).trimEnd())
+      .filter(line => line !== '');
+
+    if (normalized.length === 0) {
+      return;
+    }
+
+    step.output.push(...normalized);
+    await this.inputProvider.onStepProgress?.(this.plan, this.activeStepIndex);
+  }
 
   public getVariable(name: string): WorkflowVariableValue {
     return this.plan.getVariable(name);
@@ -851,7 +907,8 @@ export class WorkflowExecutionStep {
               public readonly description: string,
               public readonly execution: WorkflowStepExecution,
               public readonly failurePatterns: WorkflowFailurePattern[] = [],
-              public readonly visibilityCondition?: WorkflowStepVisibilityCondition) {}
+              public readonly visibilityCondition?: WorkflowStepVisibilityCondition,
+              public readonly abortWorkflowOnFailure: boolean = true) {}
 
   public status: WorkflowStepStatus = 'not-executed';
   public failureDescription = '';
@@ -1168,6 +1225,8 @@ export async function executeFlow(
     }
 
     step.status = 'running';
+    step.output = [];
+    context.setActiveStepIndex(i);
     await inputProvider.onStepStarted?.(plan, i);
     if (!continueExecution) {
       step.status = 'not-executed';
@@ -1181,7 +1240,7 @@ export async function executeFlow(
     try {
       const result = await executeStep(step, context);
       const output = result.output ?? [];
-      step.output = output;
+      step.output.push(...output);
 
       if (result.success) {
         step.status = 'successful';
@@ -1191,15 +1250,19 @@ export async function executeFlow(
         step.failureDescription = result.failureDescription
           ?? step.matchFailureDescription(output)
           ?? 'Step failed.';
-        continueExecution = false;
+        if (step.abortWorkflowOnFailure) {
+          continueExecution = false;
+        }
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       const output = [message];
-      step.output = output;
+      step.output.push(...output);
       step.status = 'failed';
       step.failureDescription = step.matchFailureDescription(output) ?? message;
-      continueExecution = false;
+      if (step.abortWorkflowOnFailure) {
+        continueExecution = false;
+      }
     }
 
     await inputProvider.onStepFinished?.(plan, i);
@@ -1239,15 +1302,15 @@ function writeExecutionPlanMarkdownSnapshot(plan: WorkflowExecutionPlan, stepInd
 
 function getStatusIcon(status: WorkflowStepStatus): string {
   if (status === 'successful') {
-    return 'SUCCESS';
+    return '🟢';
   }
   if (status === 'failed') {
-    return 'FAILED';
+    return '🔴';
   }
   if (status === 'running') {
-    return 'RUNNING';
+    return '🔵';
   }
-  return 'PENDING';
+  return '⚪';
 }
 
 function escapeTableCell(input: string): string {
